@@ -3,11 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -54,13 +54,17 @@ Play options:
   -subtune int
         1-based subtune number (default: SID default subtune)
   -duration duration
-        playback duration, for example 3m or 90s (default 3m)
+        playback duration, for example 3m or 90s; 0 plays until interrupted (default 3m)
   -start duration
         skip this far into the rendered tune before playback
   -rate int
         sample rate (default 44100)
   -volume float
         playback volume multiplier (default 1)
+  -fade-in duration
+        fade in at the start of each play span (default 5ms)
+  -fade-out duration
+        fade out at the end of each finite play span (default 25ms)
   -loop
         repeat the selected render span until interrupted
   -buffer duration
@@ -131,6 +135,8 @@ func play(args []string) error {
 	rate := fs.Int("rate", 44100, "sample rate")
 	volume := fs.Float64("volume", 1, "playback volume multiplier")
 	loop := fs.Bool("loop", false, "repeat until interrupted")
+	fadeIn := fs.Duration("fade-in", 5*time.Millisecond, "fade in at the start of each play span")
+	fadeOut := fs.Duration("fade-out", 25*time.Millisecond, "fade out at the end of each finite play span")
 	buffer := fs.Duration("buffer", 100*time.Millisecond, "audio device buffer size")
 	quiet := fs.Bool("quiet", false, "suppress playback status output")
 	if err := fs.Parse(args); err != nil {
@@ -139,11 +145,17 @@ func play(args []string) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("usage: zmk-sid play [options] <file.sid>")
 	}
-	if *duration <= 0 {
-		return fmt.Errorf("duration must be positive")
+	if *duration < 0 {
+		return fmt.Errorf("duration must not be negative")
 	}
 	if *start < 0 {
 		return fmt.Errorf("start must not be negative")
+	}
+	if *fadeIn < 0 {
+		return fmt.Errorf("fade-in must not be negative")
+	}
+	if *fadeOut < 0 {
+		return fmt.Errorf("fade-out must not be negative")
 	}
 	if *rate < 8000 || *rate > 192000 {
 		return fmt.Errorf("sample rate must be between 8000 and 192000")
@@ -166,20 +178,47 @@ func play(args []string) error {
 	if *subtune < 1 || *subtune > int(tune.Songs) {
 		return fmt.Errorf("subtune %d is outside 1..%d", *subtune, tune.Songs)
 	}
+	durationSamples := samplesForDuration(*duration, *rate)
+	startSamples := samplesForDuration(*start, *rate)
+	fadeInSamples := samplesForDuration(*fadeIn, *rate)
+	fadeOutSamples := samplesForDuration(*fadeOut, *rate)
+	if durationSamples == 0 {
+		fadeOutSamples = 0
+	}
+	if durationSamples > 0 {
+		maxFade := durationSamples / 2
+		if fadeInSamples > maxFade {
+			fadeInSamples = maxFade
+		}
+		if fadeOutSamples > maxFade {
+			fadeOutSamples = maxFade
+		}
+	}
 
 	if !*quiet {
-		printPlaySummary(tune, *subtune, *duration, *start, *rate, *loop)
+		effectiveFadeIn := samplesToDuration(int64(fadeInSamples), *rate)
+		effectiveFadeOut := samplesToDuration(int64(fadeOutSamples), *rate)
+		printPlaySummary(tune, *subtune, *duration, *start, effectiveFadeIn, effectiveFadeOut, *rate, *loop)
 		fmt.Fprintln(os.Stderr, "Streaming...")
 	}
 
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 	go func() {
-		<-signals
-		close(stop)
+		select {
+		case <-signals:
+			close(stop)
+		case <-done:
+		}
 	}()
+	defer close(done)
+
+	var playedSamples atomic.Int64
+	stopProgress := startPlayProgress(!*quiet, &playedSamples, *rate, durationSamples, *loop, stop)
+	defer stopProgress()
 
 	factory := func() (playback.SampleSource, error) {
 		stream, err := sid.NewStream(tune, sid.StreamOptions{
@@ -190,14 +229,19 @@ func play(args []string) error {
 			return nil, err
 		}
 		if *start > 0 {
-			if err := skipSamples(stream, samplesForDuration(*start, *rate)); err != nil {
+			if err := playback.SkipSamples(stream, startSamples); err != nil {
 				return nil, err
 			}
 		}
-		return &limitedSampleSource{
-			source:    stream,
-			remaining: samplesForDuration(*duration, *rate),
-		}, nil
+		wrapped := playback.WrapSource(
+			stream,
+			playback.WithLimitSamples(durationSamples),
+			playback.WithFadeSamples(fadeInSamples, fadeOutSamples),
+			playback.WithSampleMeter(func(n int) {
+				playedSamples.Add(int64(n))
+			}),
+		)
+		return wrapped, nil
 	}
 
 	return playback.PlayStream(factory, *rate, playback.Options{
@@ -206,49 +250,6 @@ func play(args []string) error {
 		Stop:       stop,
 		BufferSize: *buffer,
 	})
-}
-
-type sampleSource interface {
-	ReadSamples([]int16) (int, error)
-}
-
-type limitedSampleSource struct {
-	source    sampleSource
-	remaining int
-}
-
-func (s *limitedSampleSource) ReadSamples(dst []int16) (int, error) {
-	if s.remaining <= 0 {
-		return 0, io.EOF
-	}
-	if len(dst) > s.remaining {
-		dst = dst[:s.remaining]
-	}
-	n, err := s.source.ReadSamples(dst)
-	s.remaining -= n
-	if err != nil {
-		return n, err
-	}
-	if s.remaining <= 0 {
-		return n, io.EOF
-	}
-	return n, nil
-}
-
-func skipSamples(source sampleSource, samples int) error {
-	buf := make([]int16, 4096)
-	for samples > 0 {
-		chunk := len(buf)
-		if chunk > samples {
-			chunk = samples
-		}
-		n, err := source.ReadSamples(buf[:chunk])
-		samples -= n
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func samplesForDuration(duration time.Duration, sampleRate int) int {
@@ -300,19 +301,114 @@ func render(args []string) error {
 	return sid.WriteWAV(*out, *rate, pcm)
 }
 
-func printPlaySummary(tune *sid.Tune, subtune int, duration, start time.Duration, rate int, loop bool) {
+func printPlaySummary(tune *sid.Tune, subtune int, duration, start, fadeIn, fadeOut time.Duration, rate int, loop bool) {
 	fmt.Fprintf(os.Stderr, "Title:    %s\n", tune.Title)
 	fmt.Fprintf(os.Stderr, "Author:   %s\n", tune.Author)
 	fmt.Fprintf(os.Stderr, "Subtune:  %d/%d\n", subtune, tune.Songs)
-	fmt.Fprintf(os.Stderr, "Duration: %s\n", duration)
+	if duration == 0 {
+		fmt.Fprintln(os.Stderr, "Duration: until interrupted")
+	} else {
+		fmt.Fprintf(os.Stderr, "Duration: %s\n", duration)
+	}
 	if start > 0 {
 		fmt.Fprintf(os.Stderr, "Start:    %s\n", start)
+	}
+	if fadeIn > 0 || fadeOut > 0 {
+		fmt.Fprintf(os.Stderr, "Fade:     in %s, out %s\n", formatOptionalDuration(fadeIn), formatOptionalDuration(fadeOut))
 	}
 	fmt.Fprintf(os.Stderr, "Rate:     %d Hz\n", rate)
 	if loop {
 		fmt.Fprintln(os.Stderr, "Loop:     yes")
 	}
 	fmt.Fprintln(os.Stderr, "Stop:     Ctrl-C")
+}
+
+func startPlayProgress(enabled bool, played *atomic.Int64, sampleRate, durationSamples int, loop bool, stop <-chan struct{}) func() {
+	if !enabled || !isTerminal(os.Stderr) {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				printPlayProgress(played.Load(), sampleRate, durationSamples, loop)
+			case <-stop:
+				fmt.Fprintln(os.Stderr)
+				return
+			case <-done:
+				fmt.Fprint(os.Stderr, "\r")
+				printPlayProgress(played.Load(), sampleRate, durationSamples, loop)
+				fmt.Fprintln(os.Stderr)
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+	}
+}
+
+func printPlayProgress(samples int64, sampleRate, durationSamples int, loop bool) {
+	elapsed := samplesToDuration(samples, sampleRate)
+	if durationSamples <= 0 {
+		fmt.Fprintf(os.Stderr, "\rElapsed: %s", formatClock(elapsed))
+		return
+	}
+
+	currentSamples := samples
+	loopNumber := int64(1)
+	if loop {
+		span := int64(durationSamples)
+		loopNumber = samples/span + 1
+		currentSamples = samples % span
+		if currentSamples == 0 && samples > 0 {
+			currentSamples = span
+			loopNumber--
+		}
+	}
+	current := samplesToDuration(currentSamples, sampleRate)
+	total := samplesToDuration(int64(durationSamples), sampleRate)
+	if loop {
+		fmt.Fprintf(os.Stderr, "\rElapsed: %s / %s (loop %d)", formatClock(current), formatClock(total), loopNumber)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\rElapsed: %s / %s", formatClock(current), formatClock(total))
+}
+
+func formatClock(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	totalSeconds := int(d.Round(time.Second).Seconds())
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds / 60) % 60
+	seconds := totalSeconds % 60
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+	}
+	return fmt.Sprintf("%02d:%02d", minutes, seconds)
+}
+
+func formatOptionalDuration(d time.Duration) string {
+	if d == 0 {
+		return "off"
+	}
+	return d.String()
+}
+
+func samplesToDuration(samples int64, sampleRate int) time.Duration {
+	return time.Duration((float64(samples) / float64(sampleRate)) * float64(time.Second))
+}
+
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func analyze(args []string) error {
@@ -378,6 +474,7 @@ func printStats(stats sid.AudioStats) {
 	fmt.Printf("Peak:          %.4f\n", stats.Peak)
 	fmt.Printf("RMS:           %.4f\n", stats.RMS)
 	fmt.Printf("DC offset:     %.5f\n", stats.DCOffset)
+	fmt.Printf("Max delta:     %.4f at sample %d\n", stats.MaxDelta, stats.MaxDeltaAt)
 	fmt.Printf("Crest factor:  %.2f\n", stats.CrestFactor)
 	fmt.Printf("Clipped:       %d\n", stats.Clipped)
 	fmt.Printf("Zero crossings:%d\n", stats.ZeroCrossings)

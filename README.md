@@ -10,7 +10,7 @@ currently provides:
 - a 64K C64 memory bus with SID register mapping
 - direct `play` address and minimal IRQ-driven tune playback
 - a model-aware three-voice SID path with oversampling
-- ADSR, D418 sample, OSC3, ENV3, basic multimode filter, and output filtering
+- ADSR, D418 sample, OSC3, ENV3, model-aware multimode filter, and output filtering
 - offline WAV rendering and pull-based sample streaming for apps
 
 ## CLI
@@ -85,13 +85,18 @@ Useful flags:
 
 ```sh
 -subtune 2      # 1-based subtune number; defaults to SID default subtune
--duration 3m    # selected playback span
+-duration 3m    # selected playback span; use 0 to play until interrupted
 -start 30s      # skip into the tune before playback
 -rate 48000     # output sample rate
 -volume 0.8     # playback gain multiplier
+-fade-in 5ms    # smooth the start of each play span
+-fade-out 25ms  # smooth the end of each finite play span
 -loop           # repeat the selected span until Ctrl-C
 -quiet          # suppress status output
 ```
+
+By default `play` streams audio, applies short fades to avoid edge clicks, and
+shows elapsed progress on interactive terminals.
 
 On macOS, playback uses the Go audio backend directly. On Linux, the default
 build streams raw PCM to common system players (`aplay`, `ffplay`, `paplay`,
@@ -112,8 +117,8 @@ zmk-sid render -subtune 1 -duration 2m -rate 44100 -o tune.wav Commando.sid
 
 ### `analyze`
 
-Reports peak, RMS, DC offset, clipped samples, crest factor, and zero crossings.
-It accepts SID files or mono 16-bit WAV files:
+Reports peak, RMS, DC offset, maximum sample delta, clipped samples, crest
+factor, and zero crossings. It accepts SID files or mono 16-bit WAV files:
 
 ```sh
 zmk-sid analyze -duration 30s Commando.sid
@@ -208,8 +213,20 @@ The renderer is still intentionally approximate. It can run direct `play`
 address tunes and many interrupt-driven tunes, including simple RSID cases, but
 it does not yet emulate a full C64 main loop, BASIC RSID startup, ROM behavior,
 cycle-exact SID behavior, true transistor-level combined waveforms, or a
-reSID-grade analog filter model. Many common undocumented 6510 opcodes are
-implemented, but not every unstable silicon edge case is modeled.
+reSID-grade analog filter model.
+
+The SID audio path does include separate 6581/8580 cutoff curves, non-linear
+6581-style filter drive, model-specific mixer/output shaping, D418 sample
+support, and correct voice-3-off behavior when voice 3 is routed through the
+filter. It is meant to sound musical and SID-like while staying small and pure
+Go; it is not yet calibrated against measured chip profiles.
+
+For a more detailed map of which audio-engine choices are well-established SID
+behavior and which are still tuned approximations, see
+[docs/sid-engine-notes.md](docs/sid-engine-notes.md).
+
+Many common undocumented 6510 opcodes are implemented, but not every unstable
+silicon edge case is modeled.
 
 The code is structured so the parser, CPU, C64 bus, SID model, streaming
 renderer, and CLI can be improved independently.

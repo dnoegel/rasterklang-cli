@@ -16,6 +16,9 @@ func TestAnalyzePCM16(t *testing.T) {
 	if stats.Peak < 0.99 {
 		t.Fatalf("peak = %f, want near 1", stats.Peak)
 	}
+	if stats.MaxDelta < 1.9 || stats.MaxDeltaAt != 1 {
+		t.Fatalf("max delta = %f at %d, want near 2 at sample 1", stats.MaxDelta, stats.MaxDeltaAt)
+	}
 	if stats.ZeroCrossings != 3 {
 		t.Fatalf("zero crossings = %d, want 3", stats.ZeroCrossings)
 	}

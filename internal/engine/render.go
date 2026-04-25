@@ -38,6 +38,8 @@ type Stream struct {
 	maxPlayCycles   int
 	cyclesPerSample float64
 	cycleAcc        float64
+	subSum          float64
+	subCount        int
 	pending         []int16
 	samplePos       int64
 }
@@ -66,11 +68,13 @@ func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
 	chip := sid.NewWithModel(opts.SampleRate, tune.CPUClockHz(), sidModel(tune.SIDModel))
 	bus := c64.NewBus(chip)
 	initMachine(bus)
+	configureTuneEnvironment(bus, tune)
 	if err := bus.Load(tune.EffectiveLoad, tune.Payload); err != nil {
 		return nil, err
 	}
 
 	cpu := c64.NewCPU(bus)
+	bus.RAM[0x0001] = bankRegisterForCall(tune.InitAddress)
 	initCycles := int(tune.CPUClockHz() * 2)
 	if _, err := cpu.RunSubroutine(tune.InitAddress, byte(opts.Subtune-1), initCycles); err != nil {
 		var limit *c64.CycleLimitError
@@ -79,7 +83,10 @@ func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
 		}
 	}
 
-	frameRate := tune.FrameRateForSubtune(opts.Subtune)
+	cyclesPerFrame := tune.CPUClockHz() / float64(tune.FrameRateForSubtune(opts.Subtune))
+	if tune.SpeedForSubtune(opts.Subtune) == 1 {
+		cyclesPerFrame = ciaTimerCycles(bus, cyclesPerFrame)
+	}
 	return &Stream{
 		tune:            tune,
 		chip:            chip,
@@ -87,8 +94,8 @@ func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
 		cpu:             cpu,
 		subtune:         opts.Subtune,
 		sampleRate:      opts.SampleRate,
-		cyclesPerFrame:  tune.CPUClockHz() / float64(frameRate),
-		maxPlayCycles:   int(tune.CPUClockHz()/float64(frameRate)) * 2,
+		cyclesPerFrame:  cyclesPerFrame,
+		maxPlayCycles:   int(cyclesPerFrame) * 2,
 		cyclesPerSample: tune.CPUClockHz() / float64(opts.SampleRate),
 	}, nil
 }
@@ -143,27 +150,38 @@ func (s *Stream) ReadSamples(dst []int16) (int, error) {
 		return written, nil
 	}
 
-	audio := newAudioClock(s.chip, dst[written:], s.cyclesPerSample, s.cycleAcc, &s.pending)
+	audio := newAudioClock(s.chip, dst[written:], s.cyclesPerSample, s.cycleAcc, s.subSum, s.subCount, &s.pending)
 	for written+audio.pos < len(dst) {
 		if err := s.renderFrame(audio); err != nil {
 			s.cycleAcc = audio.cycleAcc
+			s.subSum = audio.subSum
+			s.subCount = audio.subCount
 			s.samplePos += int64(audio.pos)
 			return written + audio.pos, err
 		}
 	}
 	s.cycleAcc = audio.cycleAcc
+	s.subSum = audio.subSum
+	s.subCount = audio.subCount
 	written += audio.pos
 	s.samplePos += int64(audio.pos)
 	return written, nil
 }
 
 func (s *Stream) renderFrame(audio *audioClock) error {
+	frameCycles := s.cyclesPerFrame
 	usedCycles := 0
 	afterStep := func(cycles int) {
 		usedCycles += cycles
 		audio.addCycles(float64(cycles))
 	}
+	s.bus.DelaySIDWrites = true
+	defer func() {
+		s.bus.FlushSIDWrites()
+		s.bus.DelaySIDWrites = false
+	}()
 	if s.tune.PlayAddress != 0 {
+		s.bus.RAM[0x0001] = bankRegisterForCall(s.tune.PlayAddress)
 		if _, err := s.cpu.RunSubroutineWithHook(s.tune.PlayAddress, s.cpu.A, s.maxPlayCycles, afterStep); err != nil {
 			return fmt.Errorf("engine: play failed near sample %d: %w", s.samplePos+int64(audio.pos), err)
 		}
@@ -176,43 +194,68 @@ func (s *Stream) renderFrame(audio *audioClock) error {
 			return fmt.Errorf("engine: IRQ play failed near sample %d: %w", s.samplePos+int64(audio.pos), err)
 		}
 	}
-	if idle := s.cyclesPerFrame - float64(usedCycles); idle > 0 {
+	if idle := frameCycles - float64(usedCycles); idle > 0 {
 		audio.addCycles(idle)
 	}
+	s.refreshPlaybackTimer()
 	return nil
 }
 
-type audioClock struct {
-	chip            *sid.Chip
-	pcm             []int16
-	pos             int
-	cyclesPerSample float64
-	cycleAcc        float64
-	overflow        *[]int16
+func (s *Stream) refreshPlaybackTimer() {
+	if s.tune.SpeedForSubtune(s.subtune) != 1 {
+		return
+	}
+	s.cyclesPerFrame = ciaTimerCycles(s.bus, s.cyclesPerFrame)
+	s.maxPlayCycles = int(s.cyclesPerFrame) * 2
 }
 
-func newAudioClock(chip *sid.Chip, pcm []int16, cyclesPerSample, cycleAcc float64, overflow *[]int16) *audioClock {
+type audioClock struct {
+	chip               *sid.Chip
+	pcm                []int16
+	pos                int
+	oversample         int
+	cyclesPerSubSample float64
+	cycleAcc           float64
+	subSum             float64
+	subCount           int
+	overflow           *[]int16
+}
+
+func newAudioClock(chip *sid.Chip, pcm []int16, cyclesPerSample, cycleAcc, subSum float64, subCount int, overflow *[]int16) *audioClock {
+	oversample := chip.Oversample()
 	return &audioClock{
-		chip:            chip,
-		pcm:             pcm,
-		cyclesPerSample: cyclesPerSample,
-		cycleAcc:        cycleAcc,
-		overflow:        overflow,
+		chip:               chip,
+		pcm:                pcm,
+		oversample:         oversample,
+		cyclesPerSubSample: cyclesPerSample / float64(oversample),
+		cycleAcc:           cycleAcc,
+		subSum:             subSum,
+		subCount:           subCount,
+		overflow:           overflow,
 	}
 }
 
 func (a *audioClock) addCycles(cycles float64) {
 	a.cycleAcc += cycles
-	for a.cycleAcc >= a.cyclesPerSample {
-		var sample [1]int16
-		a.chip.RenderMono(sample[:])
-		if a.pos < len(a.pcm) {
-			a.pcm[a.pos] = sample[0]
-			a.pos++
-		} else if a.overflow != nil {
-			*a.overflow = append(*a.overflow, sample[0])
+	for a.cycleAcc >= a.cyclesPerSubSample {
+		a.subSum += a.chip.RenderSubSample()
+		a.subCount++
+		if a.subCount == a.oversample {
+			sample := sid.MixSubSamples(a.subSum, a.subCount)
+			a.emit(sample)
+			a.subSum = 0
+			a.subCount = 0
 		}
-		a.cycleAcc -= a.cyclesPerSample
+		a.cycleAcc -= a.cyclesPerSubSample
+	}
+}
+
+func (a *audioClock) emit(sample int16) {
+	if a.pos < len(a.pcm) {
+		a.pcm[a.pos] = sample
+		a.pos++
+	} else if a.overflow != nil {
+		*a.overflow = append(*a.overflow, sample)
 	}
 }
 
@@ -232,6 +275,39 @@ func initMachine(bus *c64.Bus) {
 	bus.RAM[0xdc04] = 0x25
 	bus.RAM[0xdc05] = 0x40
 	bus.RAM[0xdc0d] = 0x00
+}
+
+func configureTuneEnvironment(bus *c64.Bus, tune *sidfile.Tune) {
+	if tune.Clock == sidfile.ClockNTSC {
+		bus.RAM[0x02a6] = 0x00
+		bus.RAM[0xdc04] = 0x95
+		bus.RAM[0xdc05] = 0x42
+		return
+	}
+	bus.RAM[0x02a6] = 0x01
+	bus.RAM[0xdc04] = 0x25
+	bus.RAM[0xdc05] = 0x40
+}
+
+func ciaTimerCycles(bus *c64.Bus, fallback float64) float64 {
+	timer := uint16(bus.RAM[0xdc04]) | uint16(bus.RAM[0xdc05])<<8
+	if timer == 0 {
+		return fallback
+	}
+	return float64(timer) + 1
+}
+
+func bankRegisterForCall(addr uint16) byte {
+	switch {
+	case addr < 0xa000:
+		return 0x37
+	case addr < 0xd000:
+		return 0x36
+	case addr >= 0xe000:
+		return 0x35
+	default:
+		return 0x34
+	}
 }
 
 func interruptVector(bus *c64.Bus) (uint16, bool) {

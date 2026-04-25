@@ -7,9 +7,16 @@ import (
 )
 
 type Bus struct {
-	RAM    [65536]byte
-	loaded [65536]bool
-	SID    *sid.Chip
+	RAM            [65536]byte
+	loaded         [65536]bool
+	SID            *sid.Chip
+	DelaySIDWrites bool
+	pendingSID     []sidWrite
+}
+
+type sidWrite struct {
+	reg   byte
+	value byte
 }
 
 func NewBus(chip *sid.Chip) *Bus {
@@ -44,8 +51,20 @@ func (b *Bus) Read(addr uint16) byte {
 
 func (b *Bus) Write(addr uint16, value byte) {
 	if addr >= 0xd400 && addr <= 0xd41f && b.SID != nil {
-		b.SID.Write(byte(addr-0xd400), value)
+		reg := byte(addr - 0xd400)
+		if b.DelaySIDWrites {
+			b.pendingSID = append(b.pendingSID, sidWrite{reg: reg, value: value})
+			return
+		}
+		b.SID.Write(reg, value)
 		return
 	}
 	b.RAM[addr] = value
+}
+
+func (b *Bus) FlushSIDWrites() {
+	for _, write := range b.pendingSID {
+		b.SID.Write(write.reg, write.value)
+	}
+	b.pendingSID = b.pendingSID[:0]
 }

@@ -9,6 +9,8 @@ type Stats struct {
 	Peak          float64
 	RMS           float64
 	DCOffset      float64
+	MaxDelta      float64
+	MaxDeltaAt    int
 	CrestFactor   float64
 	Clipped       int
 	ZeroCrossings int
@@ -29,13 +31,20 @@ func AnalyzePCM16(samples []int16, sampleRate int) Stats {
 	sum := 0.0
 	sumSquares := 0.0
 	lastPositive := samples[0] >= 0
-	for _, sample := range samples {
+	last := float64(samples[0]) / 32768.0
+	for i, sample := range samples {
 		if sample == math.MaxInt16 || sample == math.MinInt16 {
 			stats.Clipped++
 		}
 		x := float64(sample) / 32768.0
 		if abs := math.Abs(x); abs > stats.Peak {
 			stats.Peak = abs
+		}
+		if i > 0 {
+			if delta := math.Abs(x - last); delta > stats.MaxDelta {
+				stats.MaxDelta = delta
+				stats.MaxDeltaAt = i
+			}
 		}
 		sum += x
 		sumSquares += x * x
@@ -44,6 +53,7 @@ func AnalyzePCM16(samples []int16, sampleRate int) Stats {
 			stats.ZeroCrossings++
 		}
 		lastPositive = nowPositive
+		last = x
 	}
 	stats.DCOffset = sum / float64(len(samples))
 	stats.RMS = math.Sqrt(sumSquares / float64(len(samples)))

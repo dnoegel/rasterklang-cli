@@ -72,12 +72,14 @@ func (c *CPU) RunSubroutineWithHook(addr uint16, a byte, maxCycles int, afterSte
 		}
 		cycles, err := c.Step()
 		if err != nil {
+			c.Bus.FlushSIDWrites()
 			return total, err
 		}
 		total += cycles
 		if afterStep != nil {
 			afterStep(cycles)
 		}
+		c.Bus.FlushSIDWrites()
 	}
 	c.SP = entrySP
 	return total, &CycleLimitError{Kind: "subroutine", Address: addr, MaxCycles: maxCycles}
@@ -104,12 +106,14 @@ func (c *CPU) RunIRQWithHook(vector uint16, maxCycles int, afterStep func(cycles
 		op := c.Bus.Read(c.PC)
 		cycles, err := c.Step()
 		if err != nil {
+			c.Bus.FlushSIDWrites()
 			return total, IRQReturned, err
 		}
 		total += cycles
 		if afterStep != nil {
 			afterStep(cycles)
 		}
+		c.Bus.FlushSIDWrites()
 		if op == 0x40 {
 			return total, IRQReturned, nil
 		}

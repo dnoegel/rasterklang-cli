@@ -23,10 +23,89 @@ type Options struct {
 	BufferSize time.Duration
 }
 
+type SourceOption func(*sourceOptions)
+
+type sourceOptions struct {
+	limitSamples   int
+	fadeInSamples  int
+	fadeOutSamples int
+	onSamples      func(int)
+}
+
 func PlayMono16(samples []int16, sampleRate int, opts Options) error {
 	return PlayStream(func() (SampleSource, error) {
 		return &sliceSource{samples: samples}, nil
 	}, sampleRate, opts)
+}
+
+func WrapSource(source SampleSource, opts ...SourceOption) SampleSource {
+	cfg := sourceOptions{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.limitSamples > 0 {
+		source = &limitedSource{
+			source:    source,
+			remaining: cfg.limitSamples,
+		}
+	}
+	if cfg.fadeInSamples > 0 || cfg.fadeOutSamples > 0 {
+		totalSamples := 0
+		if cfg.limitSamples > 0 {
+			totalSamples = cfg.limitSamples
+		}
+		source = &fadedSource{
+			source:         source,
+			totalSamples:   totalSamples,
+			fadeInSamples:  cfg.fadeInSamples,
+			fadeOutSamples: cfg.fadeOutSamples,
+		}
+	}
+	if cfg.onSamples != nil {
+		source = &meteredSource{
+			source:    source,
+			onSamples: cfg.onSamples,
+		}
+	}
+	return source
+}
+
+func WithLimitSamples(samples int) SourceOption {
+	return func(opts *sourceOptions) {
+		opts.limitSamples = samples
+	}
+}
+
+func WithFadeSamples(fadeIn, fadeOut int) SourceOption {
+	return func(opts *sourceOptions) {
+		opts.fadeInSamples = fadeIn
+		opts.fadeOutSamples = fadeOut
+	}
+}
+
+func WithSampleMeter(fn func(int)) SourceOption {
+	return func(opts *sourceOptions) {
+		opts.onSamples = fn
+	}
+}
+
+func SkipSamples(source SampleSource, samples int) error {
+	buf := make([]int16, 4096)
+	for samples > 0 {
+		chunk := len(buf)
+		if chunk > samples {
+			chunk = samples
+		}
+		n, err := source.ReadSamples(buf[:chunk])
+		samples -= n
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.EOF
+		}
+	}
+	return nil
 }
 
 func validate(sampleRate int, opts Options) error {
@@ -37,6 +116,29 @@ func validate(sampleRate int, opts Options) error {
 		return fmt.Errorf("playback: volume must not be negative")
 	}
 	return nil
+}
+
+type limitedSource struct {
+	source    SampleSource
+	remaining int
+}
+
+func (s *limitedSource) ReadSamples(dst []int16) (int, error) {
+	if s.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if len(dst) > s.remaining {
+		dst = dst[:s.remaining]
+	}
+	n, err := s.source.ReadSamples(dst)
+	s.remaining -= n
+	if err != nil {
+		return n, err
+	}
+	if s.remaining <= 0 {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 type sliceSource struct {
@@ -62,17 +164,42 @@ func ApplyVolume(samples []int16, volume float64) []int16 {
 	}
 	out := make([]int16, len(samples))
 	for i, sample := range samples {
-		scaled := math.Round(float64(sample) * volume)
-		switch {
-		case scaled > math.MaxInt16:
-			out[i] = math.MaxInt16
-		case scaled < math.MinInt16:
-			out[i] = math.MinInt16
-		default:
-			out[i] = int16(scaled)
-		}
+		out[i] = scaleSample(sample, volume)
 	}
 	return out
+}
+
+type fadedSource struct {
+	source         SampleSource
+	totalSamples   int
+	fadeInSamples  int
+	fadeOutSamples int
+	pos            int
+}
+
+func (s *fadedSource) ReadSamples(dst []int16) (int, error) {
+	n, err := s.source.ReadSamples(dst)
+	for i := 0; i < n; i++ {
+		gain := fadeGain(s.pos+i, s.totalSamples, s.fadeInSamples, s.fadeOutSamples)
+		if gain != 1 {
+			dst[i] = scaleSample(dst[i], gain)
+		}
+	}
+	s.pos += n
+	return n, err
+}
+
+type meteredSource struct {
+	source    SampleSource
+	onSamples func(int)
+}
+
+func (s *meteredSource) ReadSamples(dst []int16) (int, error) {
+	n, err := s.source.ReadSamples(dst)
+	if n > 0 {
+		s.onSamples(n)
+	}
+	return n, err
 }
 
 type pcmReader struct {
@@ -148,4 +275,40 @@ func normalizeReadErr(err error) error {
 		return io.EOF
 	}
 	return err
+}
+
+func fadeGain(pos, totalSamples, fadeInSamples, fadeOutSamples int) float64 {
+	gain := 1.0
+	if fadeInSamples > 0 && pos < fadeInSamples {
+		gain *= halfSineRamp(pos+1, fadeInSamples)
+	}
+	if totalSamples > 0 && fadeOutSamples > 0 {
+		remaining := totalSamples - pos - 1
+		if remaining < fadeOutSamples {
+			gain *= halfSineRamp(remaining, fadeOutSamples)
+		}
+	}
+	return gain
+}
+
+func halfSineRamp(pos, length int) float64 {
+	if length <= 0 || pos >= length {
+		return 1
+	}
+	if pos <= 0 {
+		return 0
+	}
+	return math.Sin((float64(pos) / float64(length)) * (math.Pi / 2))
+}
+
+func scaleSample(sample int16, gain float64) int16 {
+	scaled := math.Round(float64(sample) * gain)
+	switch {
+	case scaled > math.MaxInt16:
+		return math.MaxInt16
+	case scaled < math.MinInt16:
+		return math.MinInt16
+	default:
+		return int16(scaled)
+	}
 }
