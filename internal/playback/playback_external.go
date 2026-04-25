@@ -5,44 +5,19 @@ package playback
 import (
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/dnoegel/zmk-sid/internal/wav"
 )
 
-func PlayMono16(samples []int16, sampleRate int, opts Options) error {
-	if err := validate(samples, sampleRate, opts); err != nil {
-		return err
-	}
-	if len(samples) == 0 {
-		return nil
-	}
-
-	playSamples := samples
-	if opts.Volume != 1 {
-		playSamples = ApplyVolume(samples, opts.Volume)
-	}
-
-	f, err := os.CreateTemp("", "zmk-sid-*.wav")
-	if err != nil {
-		return fmt.Errorf("playback: create temp WAV: %w", err)
-	}
-	path := f.Name()
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("playback: close temp WAV: %w", err)
-	}
-	defer os.Remove(path)
-
-	if err := wav.WriteMono16(path, sampleRate, playSamples); err != nil {
+func PlayStream(factory SourceFactory, sampleRate int, opts Options) error {
+	if err := validate(sampleRate, opts); err != nil {
 		return err
 	}
 
 	for {
-		if stopped, err := playFileOnce(path, opts.Stop); stopped || err != nil {
+		if stopped, err := playStreamOnce(factory, sampleRate, opts); stopped || err != nil {
 			return err
 		}
 		if !opts.Loop {
@@ -51,14 +26,18 @@ func PlayMono16(samples []int16, sampleRate int, opts Options) error {
 	}
 }
 
-func playFileOnce(path string, stop <-chan struct{}) (bool, error) {
+func playStreamOnce(factory SourceFactory, sampleRate int, opts Options) (bool, error) {
 	var failures []string
-	for _, spec := range playerCommands(path) {
+	for _, spec := range playerCommands(sampleRate) {
 		bin, err := exec.LookPath(spec[0])
 		if err != nil {
 			continue
 		}
-		stopped, err := runPlayer(bin, spec[1:], stop)
+		source, err := factory()
+		if err != nil {
+			return false, err
+		}
+		stopped, err := runPlayer(bin, spec[1:], source, opts)
 		if stopped || err == nil {
 			return stopped, err
 		}
@@ -68,32 +47,47 @@ func playFileOnce(path string, stop <-chan struct{}) (bool, error) {
 	if len(failures) > 0 {
 		return false, fmt.Errorf("playback: no working audio player (%s)", strings.Join(failures, "; "))
 	}
-	return false, fmt.Errorf("playback: no audio player found for %s; install pw-play, paplay, aplay, or ffplay", runtime.GOOS)
+	return false, fmt.Errorf("playback: no audio player found for %s; install aplay, ffplay, paplay, or pw-play", runtime.GOOS)
 }
 
-func playerCommands(path string) [][]string {
+func playerCommands(sampleRate int) [][]string {
+	rate := fmt.Sprint(sampleRate)
 	switch runtime.GOOS {
 	case "linux":
 		return [][]string{
-			{"pw-play", path},
-			{"paplay", path},
-			{"aplay", path},
-			{"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path},
+			{"aplay", "-q", "-f", "S16_LE", "-c", "1", "-r", rate, "-"},
+			{"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-f", "s16le", "-ar", rate, "-ac", "1", "-"},
+			{"paplay", "--raw", "--format=s16le", "--channels=1", "--rate=" + rate, "-"},
+			{"pw-play", "--format=s16", "--channels=1", "--rate=" + rate, "-"},
 		}
 	default:
 		return [][]string{
-			{"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path},
+			{"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-f", "s16le", "-ar", rate, "-ac", "1", "-"},
 		}
 	}
 }
 
-func runPlayer(bin string, args []string, stop <-chan struct{}) (bool, error) {
+func runPlayer(bin string, args []string, source SampleSource, opts Options) (bool, error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return false, err
+	}
 	if err := cmd.Start(); err != nil {
 		return false, err
 	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(stdin, newPCMReader(source, opts.Volume, opts.Stop))
+		closeErr := stdin.Close()
+		if err == nil {
+			err = closeErr
+		}
+		writeDone <- err
+	}()
 
 	done := make(chan error, 1)
 	go func() {
@@ -102,13 +96,26 @@ func runPlayer(bin string, args []string, stop <-chan struct{}) (bool, error) {
 
 	select {
 	case err := <-done:
+		if writeErr := waitWrite(writeDone); err == nil && writeErr != nil {
+			err = writeErr
+		}
 		return false, err
-	case <-stop:
+	case <-opts.Stop:
 		_ = cmd.Process.Kill()
 		select {
 		case <-done:
 		case <-time.After(time.Second):
 		}
+		_ = waitWrite(writeDone)
 		return true, nil
+	}
+}
+
+func waitWrite(writeDone <-chan error) error {
+	select {
+	case err := <-writeDone:
+		return err
+	case <-time.After(time.Second):
+		return nil
 	}
 }

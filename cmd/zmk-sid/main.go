@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -166,28 +167,9 @@ func play(args []string) error {
 		return fmt.Errorf("subtune %d is outside 1..%d", *subtune, tune.Songs)
 	}
 
-	renderDuration := *duration + *start
 	if !*quiet {
 		printPlaySummary(tune, *subtune, *duration, *start, *rate, *loop)
-		fmt.Fprintln(os.Stderr, "Rendering...")
-	}
-	pcm, err := sid.Render(tune, sid.RenderOptions{
-		Subtune:    *subtune,
-		Duration:   renderDuration,
-		SampleRate: *rate,
-	})
-	if err != nil {
-		return err
-	}
-	if *start > 0 {
-		startSample := int(start.Seconds() * float64(*rate))
-		if startSample > len(pcm) {
-			startSample = len(pcm)
-		}
-		pcm = pcm[startSample:]
-	}
-	if !*quiet {
-		fmt.Fprintln(os.Stderr, "Playing...")
+		fmt.Fprintln(os.Stderr, "Streaming...")
 	}
 
 	stop := make(chan struct{})
@@ -199,12 +181,78 @@ func play(args []string) error {
 		close(stop)
 	}()
 
-	return playback.PlayMono16(pcm, *rate, playback.Options{
+	factory := func() (playback.SampleSource, error) {
+		stream, err := sid.NewStream(tune, sid.StreamOptions{
+			Subtune:    *subtune,
+			SampleRate: *rate,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if *start > 0 {
+			if err := skipSamples(stream, samplesForDuration(*start, *rate)); err != nil {
+				return nil, err
+			}
+		}
+		return &limitedSampleSource{
+			source:    stream,
+			remaining: samplesForDuration(*duration, *rate),
+		}, nil
+	}
+
+	return playback.PlayStream(factory, *rate, playback.Options{
 		Volume:     *volume,
 		Loop:       *loop,
 		Stop:       stop,
 		BufferSize: *buffer,
 	})
+}
+
+type sampleSource interface {
+	ReadSamples([]int16) (int, error)
+}
+
+type limitedSampleSource struct {
+	source    sampleSource
+	remaining int
+}
+
+func (s *limitedSampleSource) ReadSamples(dst []int16) (int, error) {
+	if s.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if len(dst) > s.remaining {
+		dst = dst[:s.remaining]
+	}
+	n, err := s.source.ReadSamples(dst)
+	s.remaining -= n
+	if err != nil {
+		return n, err
+	}
+	if s.remaining <= 0 {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func skipSamples(source sampleSource, samples int) error {
+	buf := make([]int16, 4096)
+	for samples > 0 {
+		chunk := len(buf)
+		if chunk > samples {
+			chunk = samples
+		}
+		n, err := source.ReadSamples(buf[:chunk])
+		samples -= n
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func samplesForDuration(duration time.Duration, sampleRate int) int {
+	return int(duration.Seconds() * float64(sampleRate))
 }
 
 func render(args []string) error {

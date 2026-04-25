@@ -3,24 +3,17 @@
 package playback
 
 import (
-	"bytes"
 	"fmt"
 	"time"
-
-	"github.com/dnoegel/zmk-sid/internal/audio"
 
 	"github.com/ebitengine/oto/v3"
 )
 
-func PlayMono16(samples []int16, sampleRate int, opts Options) error {
-	if err := validate(samples, sampleRate, opts); err != nil {
+func PlayStream(factory SourceFactory, sampleRate int, opts Options) error {
+	if err := validate(sampleRate, opts); err != nil {
 		return err
 	}
-	if len(samples) == 0 {
-		return nil
-	}
 
-	data := audio.PCM16LE(samples)
 	ctx, ready, err := oto.NewContext(&oto.NewContextOptions{
 		SampleRate:   sampleRate,
 		ChannelCount: 1,
@@ -33,7 +26,11 @@ func PlayMono16(samples []int16, sampleRate int, opts Options) error {
 	<-ready
 
 	for {
-		if stopped, err := playOnce(ctx, data, opts); stopped || err != nil {
+		source, err := factory()
+		if err != nil {
+			return err
+		}
+		if stopped, err := playOnce(ctx, source, opts); stopped || err != nil {
 			return err
 		}
 		if !opts.Loop {
@@ -42,10 +39,9 @@ func PlayMono16(samples []int16, sampleRate int, opts Options) error {
 	}
 }
 
-func playOnce(ctx *oto.Context, data []byte, opts Options) (bool, error) {
-	player := ctx.NewPlayer(bytes.NewReader(data))
+func playOnce(ctx *oto.Context, source SampleSource, opts Options) (bool, error) {
+	player := ctx.NewPlayer(newPCMReader(source, opts.Volume, opts.Stop))
 	defer player.Close()
-	player.SetVolume(opts.Volume)
 	player.Play()
 
 	ticker := time.NewTicker(25 * time.Millisecond)

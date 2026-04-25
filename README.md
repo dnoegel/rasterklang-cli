@@ -56,7 +56,7 @@ zmk-sid info Commando.sid
 
 ### `play`
 
-Renders and plays a tune immediately:
+Streams a tune to your audio device:
 
 ```sh
 zmk-sid play -subtune 2 -duration 3m Commando.sid
@@ -75,9 +75,9 @@ Useful flags:
 ```
 
 On macOS, playback uses the Go audio backend directly. On Linux, the default
-build tries common system players (`pw-play`, `paplay`, `aplay`, then `ffplay`)
-so the CLI still builds on machines without ALSA development headers. For direct
-ALSA output through the Go audio backend:
+build streams raw PCM to common system players (`aplay`, `ffplay`, `paplay`,
+then `pw-play`) so the CLI still builds on machines without ALSA development
+headers. For direct ALSA output through the Go audio backend:
 
 ```sh
 go build -tags zmk_alsa ./cmd/zmk-sid
