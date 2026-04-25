@@ -2,11 +2,12 @@ package engine
 
 import (
 	"encoding/binary"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"sidplayer/internal/sidfile"
+	"github.com/dnoegel/zmk-sid/internal/sidfile"
 )
 
 func TestRenderSyntheticPSID(t *testing.T) {
@@ -66,6 +67,49 @@ func TestRenderInterruptSIDRequiresInstalledVector(t *testing.T) {
 	}
 }
 
+func TestStreamMatchesRenderWithSmallChunks(t *testing.T) {
+	tune, err := sidfile.Parse(syntheticPSID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := RenderOptions{
+		Subtune:    1,
+		Duration:   100 * time.Millisecond,
+		SampleRate: 22050,
+	}
+	full, err := Render(tune, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream, err := NewStream(tune, StreamOptions{
+		Subtune:    opts.Subtune,
+		SampleRate: opts.SampleRate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunked := make([]int16, len(full))
+	for pos := 0; pos < len(chunked); {
+		end := pos + 137
+		if end > len(chunked) {
+			end = len(chunked)
+		}
+		n, err := stream.ReadSamples(chunked[pos:end])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != end-pos {
+			t.Fatalf("ReadSamples = %d, want %d", n, end-pos)
+		}
+		pos += n
+	}
+
+	if !slices.Equal(full, chunked) {
+		t.Fatal("chunked stream output differs from full render")
+	}
+}
+
 func isSilent(pcm []int16) bool {
 	for _, sample := range pcm {
 		if sample != 0 {
@@ -88,7 +132,7 @@ func syntheticPSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic")
-	copy(data[0x36:0x56], "sidplayer")
+	copy(data[0x36:0x56], "zmk-sid")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 
@@ -123,7 +167,7 @@ func syntheticInterruptSID(magic string) []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic IRQ")
-	copy(data[0x36:0x56], "sidplayer")
+	copy(data[0x36:0x56], "zmk-sid")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 

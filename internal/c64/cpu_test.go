@@ -3,7 +3,7 @@ package c64
 import (
 	"testing"
 
-	"sidplayer/internal/sid"
+	"github.com/dnoegel/zmk-sid/internal/sid"
 )
 
 func TestRunSubroutineStoresResult(t *testing.T) {

@@ -4,8 +4,7 @@ import "math"
 
 const registerCount = 0x20
 
-var attackMS = [16]float64{2, 8, 16, 24, 38, 56, 68, 80, 100, 250, 500, 800, 1000, 3000, 5000, 8000}
-var decayReleaseMS = [16]float64{6, 24, 48, 72, 114, 168, 204, 240, 300, 750, 1500, 2400, 3000, 9000, 15000, 24000}
+var envelopeRatePeriods = [16]float64{9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251}
 
 type Model int
 
@@ -25,7 +24,7 @@ type Chip struct {
 	voices     [3]voice
 
 	filter filterState
-	hp     highpass
+	output outputStage
 }
 
 type voice struct {
@@ -37,9 +36,11 @@ type voice struct {
 }
 
 type envelope struct {
-	level float64
-	state envState
-	gate  bool
+	level       byte
+	state       envState
+	gate        bool
+	rateCounter float64
+	expCounter  int
 }
 
 type envState int
@@ -56,9 +57,10 @@ type filterState struct {
 	band float64
 }
 
-type highpass struct {
-	lastIn      float64
-	lastOut     float64
+type outputStage struct {
+	lp          float64
+	hpLastIn    float64
+	hpLastOut   float64
 	initialized bool
 }
 
@@ -91,7 +93,7 @@ func (c *Chip) Read(reg byte) byte {
 	case 0x1b:
 		return c.oscillator3()
 	case 0x1c:
-		return byte(clamp(c.voices[2].env.level, 0, 1) * 255)
+		return c.voices[2].env.level
 	}
 	return c.regs[reg]
 }
@@ -156,7 +158,7 @@ func (c *Chip) sample() float64 {
 	// for samples; the high-pass below removes the static DC but preserves moves.
 	volumeDAC := (volume*2 - 1) * c.volumeDACLevel()
 	mixed := ((bypass / 3.0) + filtered) * volume * c.outputGain()
-	return c.hp.apply(mixed + volumeDAC)
+	return c.output.apply(mixed+volumeDAC, c.sampleRate)
 }
 
 func (c *Chip) sampleVoice(i int) float64 {
@@ -179,7 +181,7 @@ func (c *Chip) sampleVoice(i int) float64 {
 		v.noise = nextNoise(v.noise)
 	}
 
-	env := v.env.advance(ad>>4, ad&0x0f, sr>>4, sr&0x0f, c.sampleRate)
+	env := v.env.advance(ad>>4, ad&0x0f, sr>>4, sr&0x0f, c.cpuHz/c.sampleRate)
 	wave := c.waveform(i, v, control, pw)
 	v.lastOutput = wave * env
 	return v.lastOutput
@@ -232,17 +234,42 @@ func (c *Chip) waveform(i int, v *voice, control byte, pulseWidth uint16) float6
 	return c.combinedWave(waves)
 }
 
-func (e *envelope) advance(attack, decay, sustain, release byte, sampleRate float64) float64 {
-	sustainLevel := float64(sustain) / 15.0
+func (e *envelope) advance(attack, decay, sustain, release byte, cycles float64) float64 {
+	period := envelopeRatePeriods[release]
+	if e.state == envAttack {
+		period = envelopeRatePeriods[attack]
+	} else if e.state == envDecay {
+		period = envelopeRatePeriods[decay]
+	}
+
+	e.rateCounter += cycles
+	for e.rateCounter >= period {
+		e.rateCounter -= period
+		e.clock(sustain)
+	}
+	return float64(e.level) / 255.0
+}
+
+func (e *envelope) clock(sustain byte) {
+	sustainLevel := sustain * 0x11
 	switch e.state {
 	case envAttack:
-		e.level += rateStep(attackMS[attack], sampleRate)
-		if e.level >= 1 {
-			e.level = 1
+		if e.level < 0xff {
+			e.level++
+		}
+		if e.level == 0xff {
 			e.state = envDecay
+			e.expCounter = 0
 		}
 	case envDecay:
-		e.level -= rateStep(decayReleaseMS[decay], sampleRate)
+		if e.level <= sustainLevel {
+			e.level = sustainLevel
+			e.state = envSustain
+			return
+		}
+		if e.clockExponential() && e.level > 0 {
+			e.level--
+		}
 		if e.level <= sustainLevel {
 			e.level = sustainLevel
 			e.state = envSustain
@@ -250,19 +277,38 @@ func (e *envelope) advance(attack, decay, sustain, release byte, sampleRate floa
 	case envSustain:
 		e.level = sustainLevel
 	case envRelease:
-		e.level -= rateStep(decayReleaseMS[release], sampleRate)
-		if e.level < 0 {
-			e.level = 0
+		if e.clockExponential() && e.level > 0 {
+			e.level--
 		}
 	}
-	return e.level
 }
 
-func rateStep(ms float64, sampleRate float64) float64 {
-	if ms <= 0 {
-		return 1
+func (e *envelope) clockExponential() bool {
+	e.expCounter++
+	if e.expCounter < exponentialPeriod(e.level) {
+		return false
 	}
-	return 1000.0 / (ms * sampleRate)
+	e.expCounter = 0
+	return true
+}
+
+func exponentialPeriod(level byte) int {
+	switch {
+	case level >= 255:
+		return 1
+	case level >= 93:
+		return 2
+	case level >= 54:
+		return 4
+	case level >= 26:
+		return 8
+	case level >= 14:
+		return 16
+	case level >= 6:
+		return 30
+	default:
+		return 30
+	}
 }
 
 func (c *Chip) cutoffHz() float64 {
@@ -312,16 +358,25 @@ func (f *filterState) apply(input float64, cutoffHz float64, resonance float64, 
 	return out
 }
 
-func (h *highpass) apply(input float64) float64 {
-	const r = 0.995
-	if !h.initialized {
-		h.lastIn = input
-		h.initialized = true
+func (o *outputStage) apply(input float64, sampleRate float64) float64 {
+	if !o.initialized {
+		o.lp = input
+		o.hpLastIn = input
+		o.initialized = true
 		return 0
 	}
-	out := input - h.lastIn + r*h.lastOut
-	h.lastIn = input
-	h.lastOut = out
+
+	lpCutoff := 16000.0
+	if lpCutoff > sampleRate*0.45 {
+		lpCutoff = sampleRate * 0.45
+	}
+	lpCoeff := 1 - math.Exp(-2*math.Pi*lpCutoff/sampleRate)
+	o.lp += lpCoeff * (input - o.lp)
+
+	hpCoeff := math.Exp(-2 * math.Pi * 16 / sampleRate)
+	out := hpCoeff * (o.hpLastOut + o.lp - o.hpLastIn)
+	o.hpLastIn = o.lp
+	o.hpLastOut = out
 	return out
 }
 

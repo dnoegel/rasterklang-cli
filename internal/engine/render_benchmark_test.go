@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"sidplayer/internal/audio"
-	"sidplayer/internal/sidfile"
+	"github.com/dnoegel/zmk-sid/internal/audio"
+	"github.com/dnoegel/zmk-sid/internal/sidfile"
 )
 
 func BenchmarkRenderSyntheticPSID(b *testing.B) {

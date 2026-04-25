@@ -3,7 +3,7 @@ package c64
 import (
 	"fmt"
 
-	"sidplayer/internal/sid"
+	"github.com/dnoegel/zmk-sid/internal/sid"
 )
 
 type Bus struct {

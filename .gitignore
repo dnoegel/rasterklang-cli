@@ -3,3 +3,4 @@
 !.env.example
 .devcontainer/.local/
 aib.yml
+dist/
