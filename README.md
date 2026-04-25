@@ -37,6 +37,8 @@ If you have Go installed, you can also install the CLI from the module:
 go install github.com/dnoegel/zmk-sid/cmd/zmk-sid@latest
 ```
 
+Tagged releases attach the same archives to GitHub Releases.
+
 For development from a checkout:
 
 ```sh
@@ -45,6 +47,25 @@ go run ./cmd/zmk-sid info path/to/tune.sid
 go run ./cmd/zmk-sid render -duration 30s -o tune.wav path/to/tune.sid
 go run ./cmd/zmk-sid analyze -duration 30s path/to/tune.sid
 ```
+
+## Releases
+
+Create releases from a clean `main` checkout:
+
+```sh
+make test
+make tag VERSION=v0.1.0
+make push-tag VERSION=v0.1.0
+```
+
+Or create and push the tag in one step:
+
+```sh
+make release VERSION=v0.1.0
+```
+
+Pushing a `v*` tag triggers the release workflow, which builds Linux/macOS
+archives and publishes them to the matching GitHub Release.
 
 ### `info`
 
