@@ -15,16 +15,16 @@ currently provides:
 
 ## CLI
 
-Download the latest build artifact from the GitHub Actions run for your
-platform:
+Download the latest release for your platform from
+<https://github.com/dnoegel/zmk-sid/releases/latest>:
 
 - `zmk-sid-linux-amd64`
 - `zmk-sid-linux-arm64`
 - `zmk-sid-macos-amd64`
 - `zmk-sid-macos-arm64`
 
-Each artifact contains a `.tar.gz` archive and a `.sha256` checksum. Unpack it
-and put the binary somewhere on your `PATH`:
+Each release asset includes a `.tar.gz` archive and a `.sha256` checksum. Unpack
+the archive and put the binary somewhere on your `PATH`:
 
 ```sh
 tar -xzf zmk-sid-linux-amd64.tar.gz
@@ -36,8 +36,6 @@ If you have Go installed, you can also install the CLI from the module:
 ```sh
 go install github.com/dnoegel/zmk-sid/cmd/zmk-sid@latest
 ```
-
-Tagged releases attach the same archives to GitHub Releases.
 
 For development from a checkout:
 
