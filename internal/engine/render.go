@@ -26,6 +26,11 @@ type StreamOptions struct {
 	SampleRate int
 }
 
+type AudioControls struct {
+	VoiceMask    byte
+	FilterBypass bool
+}
+
 // Stream is a stateful pull renderer for one SID tune/subtune.
 type Stream struct {
 	tune            *sidfile.Tune
@@ -44,8 +49,51 @@ type Stream struct {
 	samplePos       int64
 }
 
+type machineOptions struct {
+	Subtune    int
+	SampleRate int
+}
+
+type machineState struct {
+	tune            *sidfile.Tune
+	chip            *sid.Chip
+	bus             *c64.Bus
+	cpu             *c64.CPU
+	subtune         int
+	sampleRate      int
+	cyclesPerFrame  float64
+	maxPlayCycles   int
+	cyclesPerSample float64
+	cycleAcc        float64
+	subSum          float64
+	subCount        int
+	pending         []int16
+	samplePos       int64
+}
+
 // NewStream initializes a tune and returns a stateful sample renderer.
 func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
+	state, err := newMachineState(tune, machineOptions{
+		Subtune:    opts.Subtune,
+		SampleRate: opts.SampleRate,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Stream{
+		tune:            state.tune,
+		chip:            state.chip,
+		bus:             state.bus,
+		cpu:             state.cpu,
+		subtune:         state.subtune,
+		sampleRate:      state.sampleRate,
+		cyclesPerFrame:  state.cyclesPerFrame,
+		maxPlayCycles:   state.maxPlayCycles,
+		cyclesPerSample: state.cyclesPerSample,
+	}, nil
+}
+
+func newMachineState(tune *sidfile.Tune, opts machineOptions) (*machineState, error) {
 	if tune == nil {
 		return nil, fmt.Errorf("engine: nil tune")
 	}
@@ -87,7 +135,7 @@ func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
 	if tune.SpeedForSubtune(opts.Subtune) == 1 {
 		cyclesPerFrame = ciaTimerCycles(bus, cyclesPerFrame)
 	}
-	return &Stream{
+	return &machineState{
 		tune:            tune,
 		chip:            chip,
 		bus:             bus,
@@ -132,6 +180,46 @@ func (s *Stream) Subtune() int {
 // SampleRate returns the stream output sample rate.
 func (s *Stream) SampleRate() int {
 	return s.sampleRate
+}
+
+func (s *Stream) SetAudioControls(controls AudioControls) {
+	if s == nil || s.chip == nil {
+		return
+	}
+	applyAudioControls(s.chip, controls)
+}
+
+func (s *Stream) AudioControls() AudioControls {
+	if s == nil || s.chip == nil {
+		return AudioControls{VoiceMask: 0x07}
+	}
+	return audioControls(s.chip)
+}
+
+func (s *DebugStream) SetAudioControls(controls AudioControls) {
+	if s == nil || s.state == nil || s.state.chip == nil {
+		return
+	}
+	applyAudioControls(s.state.chip, controls)
+}
+
+func (s *DebugStream) AudioControls() AudioControls {
+	if s == nil || s.state == nil || s.state.chip == nil {
+		return AudioControls{VoiceMask: 0x07}
+	}
+	return audioControls(s.state.chip)
+}
+
+func applyAudioControls(chip *sid.Chip, controls AudioControls) {
+	chip.SetVoiceMask(controls.VoiceMask)
+	chip.SetFilterBypass(controls.FilterBypass)
+}
+
+func audioControls(chip *sid.Chip) AudioControls {
+	return AudioControls{
+		VoiceMask:    chip.VoiceMask(),
+		FilterBypass: chip.FilterBypass(),
+	}
 }
 
 // ReadSamples fills dst with mono 16-bit PCM samples.
@@ -219,6 +307,7 @@ type audioClock struct {
 	subSum             float64
 	subCount           int
 	overflow           *[]int16
+	onSample           func(int16)
 }
 
 func newAudioClock(chip *sid.Chip, pcm []int16, cyclesPerSample, cycleAcc, subSum float64, subCount int, overflow *[]int16) *audioClock {
@@ -256,6 +345,9 @@ func (a *audioClock) emit(sample int16) {
 		a.pos++
 	} else if a.overflow != nil {
 		*a.overflow = append(*a.overflow, sample)
+	}
+	if a.onSample != nil {
+		a.onSample(sample)
 	}
 }
 

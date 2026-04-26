@@ -10,8 +10,15 @@ type Bus struct {
 	RAM            [65536]byte
 	loaded         [65536]bool
 	SID            *sid.Chip
+	Hooks          Hooks
 	DelaySIDWrites bool
 	pendingSID     []sidWrite
+}
+
+type Hooks struct {
+	OnBusWrite func(addr uint16, value byte)
+	OnSIDWrite func(reg byte, oldValue byte, value byte)
+	OnSIDRead  func(reg byte, value byte)
 }
 
 type sidWrite struct {
@@ -44,19 +51,31 @@ func (b *Bus) IsUnloadedROM(addr uint16) bool {
 
 func (b *Bus) Read(addr uint16) byte {
 	if addr >= 0xd400 && addr <= 0xd41f && b.SID != nil {
-		return b.SID.Read(byte(addr - 0xd400))
+		reg := byte(addr - 0xd400)
+		value := b.SID.Read(reg)
+		if b.Hooks.OnSIDRead != nil {
+			b.Hooks.OnSIDRead(reg, value)
+		}
+		return value
 	}
 	return b.RAM[addr]
 }
 
 func (b *Bus) Write(addr uint16, value byte) {
+	if b.Hooks.OnBusWrite != nil {
+		b.Hooks.OnBusWrite(addr, value)
+	}
 	if addr >= 0xd400 && addr <= 0xd41f && b.SID != nil {
 		reg := byte(addr - 0xd400)
 		if b.DelaySIDWrites {
 			b.pendingSID = append(b.pendingSID, sidWrite{reg: reg, value: value})
 			return
 		}
+		old := b.SID.Register(reg)
 		b.SID.Write(reg, value)
+		if b.Hooks.OnSIDWrite != nil {
+			b.Hooks.OnSIDWrite(reg, old, value)
+		}
 		return
 	}
 	b.RAM[addr] = value
@@ -64,7 +83,14 @@ func (b *Bus) Write(addr uint16, value byte) {
 
 func (b *Bus) FlushSIDWrites() {
 	for _, write := range b.pendingSID {
+		if b.SID == nil {
+			continue
+		}
+		old := b.SID.Register(write.reg)
 		b.SID.Write(write.reg, write.value)
+		if b.Hooks.OnSIDWrite != nil {
+			b.Hooks.OnSIDWrite(write.reg, old, write.value)
+		}
 	}
 	b.pendingSID = b.pendingSID[:0]
 }

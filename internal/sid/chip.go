@@ -22,10 +22,12 @@ type Chip struct {
 	model      Model
 	oversample int
 	voices     [3]voice
+	voiceMask  byte
 
-	filter filterState
-	output outputStage
-	volume volumeDACState
+	filter       filterState
+	filterBypass bool
+	output       outputStage
+	volume       volumeDACState
 }
 
 type voice struct {
@@ -73,20 +75,18 @@ type mixerProfile struct {
 }
 
 type filterProfile struct {
-	inputGain       float64
-	inputDrive      float64
-	feedbackDrive   float64
-	integratorDrive float64
-	asymmetry       float64
-	resonanceCurve  float64
-	dampingBase     float64
-	dampingDepth    float64
-	dampingMin      float64
-	frequencyLimit  float64
-	lowGain         float64
-	bandGain        float64
-	highGain        float64
-	outputGain      float64
+	inputGain      float64
+	inputDrive     float64
+	feedbackDrive  float64
+	asymmetry      float64
+	resonanceCurve float64
+	dampingBase    float64
+	dampingDepth   float64
+	dampingMin     float64
+	lowGain        float64
+	bandGain       float64
+	highGain       float64
+	outputGain     float64
 }
 
 type outputProfile struct {
@@ -116,6 +116,36 @@ type volumeDACState struct {
 	initialized bool
 }
 
+type Snapshot struct {
+	Model     string
+	Registers [32]byte
+	Voices    [3]VoiceSnapshot
+	Filter    FilterSnapshot
+	Volume    float64
+}
+
+type VoiceSnapshot struct {
+	Frequency     uint16
+	PulseWidth    uint16
+	Control       byte
+	Waveforms     []string
+	Gate          bool
+	Phase         uint32
+	EnvelopeLevel byte
+	EnvelopeState string
+	LastOutput    float64
+}
+
+type FilterSnapshot struct {
+	CutoffRaw uint16
+	CutoffHz  float64
+	Resonance float64
+	Mode      byte
+	Routing   byte
+	Low       float64
+	Band      float64
+}
+
 func New(sampleRate int, cpuHz float64) *Chip {
 	return NewWithModel(sampleRate, cpuHz, Model6581)
 }
@@ -128,11 +158,39 @@ func NewWithModel(sampleRate int, cpuHz float64, model Model) *Chip {
 		cpuHz:      cpuHz,
 		model:      model,
 		oversample: oversample,
+		voiceMask:  0x07,
 	}
 	for i := range c.voices {
 		c.voices[i].noise = uint32(0x7ffff8 + i*0x1f123)
 	}
 	return c
+}
+
+func (c *Chip) Register(reg byte) byte {
+	if int(reg) >= len(c.regs) {
+		return 0
+	}
+	return c.regs[reg]
+}
+
+func (c *Chip) Registers() [32]byte {
+	return c.regs
+}
+
+func (c *Chip) SetVoiceMask(mask byte) {
+	c.voiceMask = mask & 0x07
+}
+
+func (c *Chip) VoiceMask() byte {
+	return c.voiceMask & 0x07
+}
+
+func (c *Chip) SetFilterBypass(enabled bool) {
+	c.filterBypass = enabled
+}
+
+func (c *Chip) FilterBypass() bool {
+	return c.filterBypass
 }
 
 func (c *Chip) Read(reg byte) byte {
@@ -210,6 +268,46 @@ func MixSubSamples(sum float64, count int) int16 {
 	return int16(softClip(sum/float64(count)) * 32767)
 }
 
+func (c *Chip) Snapshot() Snapshot {
+	snapshot := Snapshot{
+		Model:     c.ModelName(),
+		Registers: c.Registers(),
+		Filter: FilterSnapshot{
+			CutoffRaw: c.cutoffRaw(),
+			CutoffHz:  c.cutoffHz(),
+			Resonance: c.resonance(),
+			Mode:      c.regs[0x18] & 0x70,
+			Routing:   c.regs[0x17] & 0x07,
+			Low:       c.filter.low,
+			Band:      c.filter.band,
+		},
+		Volume: float64(c.regs[0x18]&0x0f) / 15.0,
+	}
+	for i := range snapshot.Voices {
+		base := i * 7
+		control := c.regs[base+4]
+		snapshot.Voices[i] = VoiceSnapshot{
+			Frequency:     uint16(c.regs[base]) | uint16(c.regs[base+1])<<8,
+			PulseWidth:    uint16(c.regs[base+2]) | uint16(c.regs[base+3]&0x0f)<<8,
+			Control:       control,
+			Waveforms:     DecodeControl(control),
+			Gate:          control&0x01 != 0,
+			Phase:         c.voices[i].phase,
+			EnvelopeLevel: c.voices[i].env.level,
+			EnvelopeState: c.voices[i].env.state.String(),
+			LastOutput:    c.voices[i].lastOutput,
+		}
+	}
+	return snapshot
+}
+
+func (c *Chip) ModelName() string {
+	if c.model == Model8580 {
+		return "8580"
+	}
+	return "6581"
+}
+
 func (c *Chip) sample() float64 {
 	var voiceOut [3]float64
 	for i := range voiceOut {
@@ -223,16 +321,28 @@ func (c *Chip) sample() float64 {
 	filteredInput := 0.0
 	bypass := 0.0
 	for i, sample := range voiceOut {
+		if c.voiceMask&(1<<uint(i)) == 0 {
+			continue
+		}
 		routedToFilter := filterSelect&(1<<uint(i)) != 0
+		scaled := sample * mix.voiceGain
+		if routedToFilter {
+			filteredInput += scaled
+		}
+		if c.filterBypass {
+			if i == 2 && voice3Off && !routedToFilter {
+				continue
+			}
+			bypass += scaled
+			continue
+		}
 		// The SID's voice-3-off bit only removes voice 3 from the direct mixer.
 		// When voice 3 is routed through the filter it remains audible.
 		if i == 2 && voice3Off && !routedToFilter {
 			continue
 		}
 
-		scaled := sample * mix.voiceGain
 		if routedToFilter {
-			filteredInput += scaled
 			if mode != 0 {
 				bypass += scaled * mix.filterLeakage
 			}
@@ -243,6 +353,9 @@ func (c *Chip) sample() float64 {
 
 	volume := float64(c.regs[0x18]&0x0f) / 15.0
 	filtered := c.filter.apply(filteredInput, c.cutoffHz(), c.resonance(), c.regs[0x18], c.sampleRate, c.model)
+	if c.filterBypass {
+		filtered = 0
+	}
 	// The volume register is also a 4-bit DAC. Many tunes use rapid D418 writes
 	// for samples; the high-pass below removes the static DC but preserves moves.
 	volumeDAC := c.volumeDACOutput(volume)
@@ -567,7 +680,7 @@ func exponentialPeriod(level byte) int {
 }
 
 func (c *Chip) cutoffHz() float64 {
-	raw := uint16(c.regs[0x15]&0x07) | uint16(c.regs[0x16])<<3
+	raw := c.cutoffRaw()
 	if c.model == Model8580 {
 		x := cutoffDAC(raw, 11, 2.0)
 		return 30 + math.Pow(x, 1.08)*12500
@@ -581,6 +694,10 @@ func (c *Chip) cutoffHz() float64 {
 	return 180 + clamp(shaped, 0, 1)*18500
 }
 
+func (c *Chip) cutoffRaw() uint16 {
+	return uint16(c.regs[0x15]&0x07) | uint16(c.regs[0x16])<<3
+}
+
 func (c *Chip) resonance() float64 {
 	return float64((c.regs[0x17]>>4)&0x0f) / 15.0
 }
@@ -589,10 +706,7 @@ func (f *filterState) apply(input float64, cutoffHz float64, resonance float64, 
 	mode := modeVol & 0x70
 	profile := filterProfileFor(model)
 	cutoff := clamp(cutoffHz, 20, sampleRate*0.45)
-	freq := 2 * math.Sin(math.Pi*cutoff/sampleRate)
-	if freq > profile.frequencyLimit {
-		freq = profile.frequencyLimit
-	}
+	g := math.Tan(math.Pi * cutoff / sampleRate)
 	res := math.Pow(clamp(resonance, 0, 1), profile.resonanceCurve)
 	damping := profile.dampingBase - res*profile.dampingDepth
 	if damping < profile.dampingMin {
@@ -600,14 +714,18 @@ func (f *filterState) apply(input float64, cutoffHz float64, resonance float64, 
 	}
 
 	driven := analogSaturate(input*profile.inputGain, profile.inputDrive, profile.asymmetry)
-	high := driven - f.low - damping*f.band
-	high = analogSaturate(high, profile.feedbackDrive, profile.asymmetry*0.5)
-	f.band += freq * high
-	f.low += freq * f.band
-	if profile.integratorDrive > 0 {
-		f.band = analogSaturate(f.band, profile.integratorDrive, profile.asymmetry*0.35)
-		f.low = analogSaturate(f.low, profile.integratorDrive, profile.asymmetry*0.25)
+	a1 := 1 / (1 + g*(g+damping))
+	a2 := g * a1
+	a3 := g * a2
+	v3 := driven - f.low
+	band := a1*f.band + a2*v3
+	low := f.low + a2*f.band + a3*v3
+	high := driven - damping*band - low
+	if profile.feedbackDrive > 0 {
+		high = analogSaturate(high, profile.feedbackDrive, profile.asymmetry*0.5)
 	}
+	f.band = 2*band - f.band
+	f.low = 2*low - f.low
 
 	if mode == 0 {
 		return 0
@@ -615,10 +733,10 @@ func (f *filterState) apply(input float64, cutoffHz float64, resonance float64, 
 
 	out := 0.0
 	if mode&0x10 != 0 {
-		out += f.low * profile.lowGain
+		out += low * profile.lowGain
 	}
 	if mode&0x20 != 0 {
-		out += f.band * profile.bandGain
+		out += band * profile.bandGain
 	}
 	if mode&0x40 != 0 {
 		out += high * profile.highGain
@@ -759,6 +877,101 @@ func absInt(v int) int {
 	return v
 }
 
+func (e envState) String() string {
+	switch e {
+	case envAttack:
+		return "attack"
+	case envDecay:
+		return "decay"
+	case envSustain:
+		return "sustain"
+	default:
+		return "release"
+	}
+}
+
+func DecodeControl(control byte) []string {
+	waves := make([]string, 0, 4)
+	if control&0x10 != 0 {
+		waves = append(waves, "triangle")
+	}
+	if control&0x20 != 0 {
+		waves = append(waves, "saw")
+	}
+	if control&0x40 != 0 {
+		waves = append(waves, "pulse")
+	}
+	if control&0x80 != 0 {
+		waves = append(waves, "noise")
+	}
+	return waves
+}
+
+func RegisterName(reg byte) string {
+	switch reg {
+	case 0x00:
+		return "voice1.freqLo"
+	case 0x01:
+		return "voice1.freqHi"
+	case 0x02:
+		return "voice1.pulseLo"
+	case 0x03:
+		return "voice1.pulseHi"
+	case 0x04:
+		return "voice1.control"
+	case 0x05:
+		return "voice1.attackDecay"
+	case 0x06:
+		return "voice1.sustainRelease"
+	case 0x07:
+		return "voice2.freqLo"
+	case 0x08:
+		return "voice2.freqHi"
+	case 0x09:
+		return "voice2.pulseLo"
+	case 0x0a:
+		return "voice2.pulseHi"
+	case 0x0b:
+		return "voice2.control"
+	case 0x0c:
+		return "voice2.attackDecay"
+	case 0x0d:
+		return "voice2.sustainRelease"
+	case 0x0e:
+		return "voice3.freqLo"
+	case 0x0f:
+		return "voice3.freqHi"
+	case 0x10:
+		return "voice3.pulseLo"
+	case 0x11:
+		return "voice3.pulseHi"
+	case 0x12:
+		return "voice3.control"
+	case 0x13:
+		return "voice3.attackDecay"
+	case 0x14:
+		return "voice3.sustainRelease"
+	case 0x15:
+		return "filter.cutoffLo"
+	case 0x16:
+		return "filter.cutoffHi"
+	case 0x17:
+		return "filter.resonanceRouting"
+	case 0x18:
+		return "filter.modeVolume"
+	case 0x19:
+		return "paddleX"
+	case 0x1a:
+		return "paddleY"
+	case 0x1b:
+		return "oscillator3"
+	case 0x1c:
+		return "envelope3"
+	default:
+		return "unknown"
+	}
+}
+
 func (c *Chip) outputGain() float64 {
 	if c.model == Model8580 {
 		return 0.74
@@ -840,7 +1053,6 @@ func filterProfileFor(model Model) filterProfile {
 			dampingBase:    1.18,
 			dampingDepth:   0.82,
 			dampingMin:     0.20,
-			frequencyLimit: 1.15,
 			lowGain:        1.00,
 			bandGain:       0.96,
 			highGain:       0.96,
@@ -848,20 +1060,18 @@ func filterProfileFor(model Model) filterProfile {
 		}
 	}
 	return filterProfile{
-		inputGain:       1.12,
-		inputDrive:      1.65,
-		feedbackDrive:   1.25,
-		integratorDrive: 1.10,
-		asymmetry:       0.055,
-		resonanceCurve:  0.82,
-		dampingBase:     1.36,
-		dampingDepth:    1.03,
-		dampingMin:      0.22,
-		frequencyLimit:  1.06,
-		lowGain:         1.08,
-		bandGain:        0.84,
-		highGain:        0.74,
-		outputGain:      0.98,
+		inputGain:      1.02,
+		inputDrive:     1.35,
+		feedbackDrive:  1.05,
+		asymmetry:      0.055,
+		resonanceCurve: 0.82,
+		dampingBase:    1.34,
+		dampingDepth:   0.92,
+		dampingMin:     0.26,
+		lowGain:        0.74,
+		bandGain:       0.68,
+		highGain:       0.82,
+		outputGain:     0.84,
 	}
 }
 
@@ -875,8 +1085,8 @@ func outputProfileFor(model Model) outputProfile {
 		}
 	}
 	return outputProfile{
-		lowpassHz:    12500,
-		lowpassPoles: 2,
+		lowpassHz:    13500,
+		lowpassPoles: 1,
 		highpassHz:   18,
 		drive:        1.04,
 		asymmetry:    0.018,

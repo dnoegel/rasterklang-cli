@@ -28,6 +28,8 @@ level behind them, and the validation still needed.
 | Filter model | Low-medium | The filter is model-aware and musical, but parameters are tuned by ear and by problem tunes, not derived from measured chip profiles. |
 | Mixer/output profile | Low-medium | Voice gain, filter leakage, drive, low-pass, and high-pass values are pragmatic shaping constants. They help avoid sterile output but are not measured. |
 | De-click ramps | Low-medium | These are playback polish, not hardware-accurate SID behavior. They reduce obvious clicks but can soften attacks if overused. |
+| Debug instrumentation | High | Trace hooks are opt-in and nil-checked. The normal `Stream` path does not allocate trace objects, while `DebugStream` owns bounded buffers and snapshots for tooling. |
+| Duration estimation | Low-medium | SID files do not encode song lengths. HVSC `Songlengths.md5` is supported for validation/database lookup, while the fallback estimator uses bounded emulation, repeated SID/audio fingerprints, and trailing silence. |
 
 ## Changes And Intent
 
@@ -126,6 +128,38 @@ Problem:
 
 - A purely clean digital oscillator path sounded too sterile and could hide the
   character of 6581/8580 material.
+- `Airwolf_Title.sid` exposed the opposite failure mode: voice 3 is routed
+  through a 6581 low-pass filter with resonance 15/15 and a sweeping cutoff.
+  The previous explicit-Euler state-variable filter became numerically too
+  ringy in that case. The first 8 seconds peaked around 0.999 with a max sample
+  delta around 0.758, while the dry audition path stayed much calmer.
+
+Earlier state:
+
+- The first useful filter path was a pragmatic state-variable filter fed by the
+  engine's normalized voice samples.
+- It used model-aware cutoff shaping and resonance damping constants, but those
+  constants were musical tuning values, not values derived from SID die
+  photographs, measured op-amp curves, or DAC tables.
+- This worked for many tunes because it gave the output a darker 6581-like
+  character, but it made a dangerous assumption: high resonance and fast cutoff
+  movement would remain numerically well behaved at the audio oversample rate.
+- `Airwolf_Title.sid` proved that assumption wrong. Its max-resonance 6581
+  low-pass sweep drove the filter into audible ringing/crackle artifacts.
+
+Airwolf investigation:
+
+- Filter bypass in Insight was the first useful diagnostic. With routed voices
+  presented dry, the same passage stayed much calmer, so the problem was not the
+  player code, voice routing, or voice 3 off behavior.
+- The first attempted mitigation reduced the audible artifacts by damping the
+  6581 filter profile more aggressively. That was deliberately not kept as the
+  real fix: it treated Airwolf as a loud symptom rather than explaining why the
+  filter became unstable.
+- The useful fix was to replace the explicit-Euler state update with a
+  topology-preserving state-variable filter form. This keeps state continuous
+  under fast cutoff and resonance changes and avoids the previous runaway sample
+  deltas.
 
 Changes:
 
@@ -133,18 +167,198 @@ Changes:
 - Added model-specific resonance, damping, input drive, output drive, filter
   leakage, and external output filtering.
 - Added 6581 asymmetry and stronger non-linearity.
+- Replaced the filter integrator with a topology-preserving state-variable
+  filter form. This keeps filter state continuous under fast cutoff changes and
+  high resonance instead of relying on explicit Euler integration.
+- Retuned the 6581 profile around the new integrator, keeping resonant character
+  without the previous uncontrolled ringing.
+- Added an `Airwolf_Title.sid` regression check that fails if the 8 second
+  render returns to uncontrolled peak or max-delta behavior.
+
+Current magic values:
+
+- The cutoff curves in `internal/sid/chip.go` are still fitted by hand:
+  8580 uses a near-linear DAC curve and 0-12.5 kHz range, while 6581 uses a
+  darker non-linear curve with a small ripple term.
+- `filterProfileFor` contains tuned values for input gain, input drive,
+  feedback drive, resonance curve, damping base/depth/minimum, per-mode output
+  gains, and final output gain.
+- `mixerProfile` contains tuned voice gain, filter leakage, mixer drive, and
+  asymmetry values.
+- These constants are acceptable for the current `balanced` sound, but they must
+  be treated as approximations. They should not be presented as measured SID
+  behavior.
+
+Reference-render comparison:
+
+- A 3 second batch comparison was run over `test_tunes` using zmk-sid versus
+  Debian `sidplayfp` 2.4.0 / `libsidplayfp` 2.4.2 with reSIDfp. `sidplayfp -nf`
+  renders were also generated to weight tunes whose reference output is actually
+  filter-sensitive.
+- 201 of 202 tunes completed. `Great_Giana_Sisters.sid` was excluded because
+  `sidplayfp` did not terminate its 3 second WAV render in this environment.
+- Raw RMS is not a good filter-tuning signal by itself: zmk-sid renders were
+  roughly twice as loud as the sidplayfp CLI output in the median case. After
+  normalizing band energy by RMS, filter-sensitive tunes showed a clearer color
+  bias: too much low/low-mid energy, only slightly too much mid energy, and too
+  little high/air energy.
+- The 6581 profile was retuned conservatively from those normalized medians:
+  low-pass output gain moved from 0.94 to 0.74, band-pass from 0.78 to 0.68,
+  and high-pass from 0.68 to 0.82. This is a fitted approximation, not a
+  measured chip profile.
+- The extra-dark 6581 output stage was also relaxed from a two-pole 12.5 kHz
+  low-pass to a one-pole 13.5 kHz low-pass. This keeps more high-frequency
+  content than the earlier Airwolf mitigation while staying below the Airwolf
+  regression's transient limit.
 
 Expected effect:
 
 - 6581 output should be darker, rougher, and less linear.
 - 8580 output should be cleaner, with different DC and filter behavior.
 - Filter-heavy tunes should retain more character.
+- Airwolf Title should keep its resonant low-pass sweep without the previous
+  near-clipping crackle spikes. The first 8 seconds now measure around peak
+  0.714 and max delta 0.285.
 
 Remaining uncertainty:
 
 - These are currently tuned profiles, not measured chip profiles.
 - A future API should expose named profiles rather than hiding all constants in
   code.
+- The TPT integrator is a better numerical model than the old explicit update,
+  but the 6581 profile constants remain tuned approximations. They still need
+  validation against reference renders or measured chip profiles.
+
+Reference engines:
+
+- reSID and reSIDfp model the SID filter as the two-integrator-loop biquadratic
+  circuit used by the chip rather than as a generic audio EQ.
+- reSIDfp/libsidplayfp builds lookup tables for the filter summer, mixer,
+  resonance, volume amplifier, op-amp reverse transfer, and DAC behavior. Its
+  6581 model uses measured op-amp voltage transfer points, 6581 DAC
+  non-linearity, VCR current modeling, and explicit 6581/8580 model separation.
+- The current libsidplayfp `residfp` source also exposes filter-curve controls
+  for chip variation instead of baking one hidden 6581 curve into the engine.
+- VICE and libsidplayfp-derived players are useful references because they carry
+  reSID/reSIDfp filter work and many years of SID regression testing.
+
+Useful source references:
+
+- libsidplayfp release source: `src/builders/residfp-builder/residfp/Filter*.{h,cpp}`,
+  `FilterModelConfig*.{h,cpp}`, `Integrator*.{h,cpp}`, `Dac.cpp`, and
+  `ExternalFilter.*`
+- https://github.com/libsidplayfp/libsidplayfp
+- https://github.com/libsidplayfp/libsidplayfp/releases/download/v2.16.1/libsidplayfp-2.16.1.tar.gz
+
+### Debug and learning instrumentation
+
+Problem:
+
+- `zmk-learn` and future WASM tools need to explain what the engine is doing
+  without importing `internal/` packages or coupling the emulator to browser UI
+  concepts.
+- Unbounded traces would be unsafe for browser and teaching UIs.
+
+Changes:
+
+- Added an opt-in public `DebugStream` API with frame, CPU, bus, SID, and audio
+  trace categories.
+- Added fixed-size trace rings with dropped-event accounting.
+- Added snapshots for CPU registers, selected bus state, SID registers, voices,
+  filter state, and engine counters.
+- Added low-level bus hooks, CPU `StepWithInfo`, and read-only SID snapshot
+  helpers.
+
+Expected effect:
+
+- `zmk-learn` can drive frame-by-frame and instruction-oriented views through
+  the root Go package, including from WASM.
+- Normal playback stays on `Stream`; when tracing is disabled, hooks are nil and
+  trace buffers are not allocated.
+
+Remaining uncertainty:
+
+- Instruction stepping uses the engine's minimal direct-play and IRQ call
+  contexts. It is useful for teaching and inspection, but still does not model a
+  full C64 main loop around the player.
+- CPU mnemonics are intentionally coarse labels. Addressing-mode text can be
+  expanded later without changing the event schema.
+
+### Audio audition controls
+
+Problem:
+
+- `zmk-learn` Insight needs listener-facing controls so users can isolate which
+  SID voices and filter routing shape the sound they are hearing.
+- These controls must not rewrite the tune's SID registers or alter CPU/player
+  execution, because the register heatmap and trace should continue to show the
+  original program behavior.
+
+Changes:
+
+- Added render-time audio controls for a three-bit voice mask and filter
+  bypass.
+- Muted voices still advance oscillators, envelopes, OSC3/ENV3 reads, sync, and
+  ring-mod state; they are only removed at the final mixer input.
+- Filter bypass keeps the filter state fed but presents routed voices as dry
+  audio, so switching back to the normal filter path is an audition choice
+  rather than a register mutation.
+- Exposed the controls through `Stream`, `DebugStream`, and the WASM API.
+
+Expected effect:
+
+- Insight can default to the original mix, then let the user mute/solo voices or
+  compare filtered versus dry audio while all SID register views remain honest.
+
+Remaining uncertainty:
+
+- Filter bypass is not SID hardware behavior. It is an educational monitoring
+  layer for tooling and should remain clearly separated from emulation state.
+
+### Duration estimation
+
+Problem:
+
+- SID files are executable player code and usually do not contain reliable song
+  length metadata.
+- A fixed playback default such as 3 minutes is often visibly wrong in a music
+  client.
+- HVSC songlength databases are the best source for known collection files and
+  are also useful for measuring how far the heuristic is off.
+- Local or unknown SIDs still need a fallback.
+
+Changes:
+
+- Added a public `EstimateDuration` API and a `zmk-sid duration` command.
+- Added modern HVSC `Songlengths.md5` parsing, full-content SID MD5 lookup, and
+  a `zmk-sid duration-validate` command.
+- The estimator renders at a low sample rate, groups output into time windows,
+  and tracks SID register state plus coarse audio activity.
+- Repeated active windows become loop candidates; sustained silence after
+  previous activity becomes an end candidate.
+- `play` now estimates duration by default when `-duration` was not explicitly
+  provided, with a 3 second wall-clock budget and a 3 minute fallback when the
+  result remains unknown.
+
+Expected effect:
+
+- The CLI and future UI clients get a practical default duration for many tunes
+  without blocking on an external database.
+- Results include source, confidence, scanned duration, and reason so callers
+  can present uncertainty honestly.
+- The validator can compare whole directories against `Songlengths.md5`, report
+  mismatches over a threshold, and summarize mean/max absolute error.
+
+Remaining uncertainty:
+
+- This is a heuristic. Repeated sections can look like loops, quiet passages can
+  look like endings, and complex players may hide state outside the observed SID
+  register/audio fingerprint.
+- The parser targets the modern `Songlengths.md5` format where MD5 is computed
+  over the full SID file. The old pre-HVSC#71 special SID MD5 format is not
+  implemented.
+- Future player work should use HVSC songlength entries as primary duration data
+  and this estimator only as fallback.
 
 ## What Is Deliberately Approximate
 
@@ -155,6 +369,8 @@ Remaining uncertainty:
 - Filter behavior is not transistor-level.
 - The output stage is a useful audio model, not a measured analog circuit.
 - De-clicking is a listener-facing safety layer, not strict emulation.
+- Duration estimation is not part of SID emulation accuracy. It is a player
+  convenience layer.
 
 ## Validation So Far
 
@@ -165,6 +381,9 @@ go test ./...
 go run ./cmd/zmk-sid analyze -duration 5s ../test_tunes/Cordis_Monophonous.sid
 go run ./cmd/zmk-sid analyze -duration 10s ../test_tunes/8_Bit-Maerchenland_V2.sid
 go run ./cmd/zmk-sid analyze -duration 10s ../test_tunes/Alles_Luege.sid
+go run ./cmd/zmk-sid analyze -duration 8s ../test_tunes/Airwolf_Title.sid
+go run ./cmd/zmk-sid duration -budget 3s ../test_tunes/Alles_Luege.sid
+go run ./cmd/zmk-sid duration-validate -songlengths ~/C64Music/DOCUMENTS/Songlengths.md5 ~/C64Music/MUSICIANS/H/Hubbard_Rob
 ```
 
 Useful current problem tunes:
@@ -172,6 +391,8 @@ Useful current problem tunes:
 - `Cordis_Monophonous.sid`: click and note-edge behavior.
 - `8_Bit-Maerchenland_V2.sid`: subtle `pulse+saw` track around 7-8 seconds.
 - `Alles_Luege.sid`: CIA speed and perceived timing.
+- `Airwolf_Title.sid`: max-resonance 6581 low-pass sweep on voice 3; catches
+  over-aggressive filter ringing and crackle-like transients.
 
 Metrics are not enough on their own. Peak, RMS, max delta, and zero crossings can
 catch regressions, but listening tests and reference renders are still required.
@@ -182,13 +403,15 @@ catch regressions, but listening tests and reference renders are still required.
 
    Suggested profiles:
 
-   - `accurate`: fewer playback-polish ramps, stricter SID semantics.
+   - `accurate`: fewer playback-polish ramps, stricter SID semantics, and either
+     reference-engine comparison or a future reSID-style filter model.
    - `balanced`: current default direction.
    - `soft`: stronger de-clicking for casual playback.
 
 2. Add a reference comparison harness.
 
-   Render known time windows with zmk-sid and a reference engine, then compare:
+   Render known time windows with zmk-sid and a reference engine such as
+   libsidplayfp/reSIDfp, then compare:
 
    - RMS and peak
    - zero crossings
@@ -196,15 +419,20 @@ catch regressions, but listening tests and reference renders are still required.
    - onset deltas
    - optionally reference WAV snippets checked into a separate test-data repo
 
+   This should be comparison-only unless the project explicitly accepts the
+   licensing and maintenance implications of embedding or porting GPL reSIDfp
+   code.
+
 3. Replace more heuristics with documented tables or measured curves.
 
    Priority order:
 
+   - filter cutoff/resonance profiles
+   - filter mixer, volume, and output-stage constants
    - `pulse+saw`
    - `saw+triangle`
    - `pulse+triangle`
    - `pulse+saw+triangle`
-   - filter cutoff/resonance profiles
 
 4. Make de-click behavior configurable.
 

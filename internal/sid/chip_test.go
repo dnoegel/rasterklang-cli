@@ -166,6 +166,43 @@ func TestVoice3OffKeepsFilteredVoice3Audible(t *testing.T) {
 	}
 }
 
+func TestVoiceMaskMutesMixerButKeepsVoiceStateRunning(t *testing.T) {
+	chip := New(44100, 985248)
+	chip.SetVoiceMask(0x00)
+	chip.Write(0x0e, 0x00)
+	chip.Write(0x0f, 0x20)
+	chip.Write(0x12, 0x21) // voice 3 saw + gate
+	chip.Write(0x13, 0x00)
+	chip.Write(0x14, 0xf0)
+	chip.Write(0x18, 0x0f)
+	chip.volume.active = false
+
+	before := chip.Read(0x1b)
+	pcm := make([]int16, 2000)
+	chip.RenderMono(pcm)
+	after := chip.Read(0x1b)
+	if before == after {
+		t.Fatalf("muted OSC3 did not advance: before=$%02x after=$%02x", before, after)
+	}
+	if env := chip.Read(0x1c); env == 0 {
+		t.Fatal("muted voice envelope did not advance")
+	}
+	if rms(pcm[500:]) > 120 {
+		t.Fatalf("muted voice leaked too much audio: %.2f RMS", rms(pcm[500:]))
+	}
+}
+
+func TestFilterBypassAuditionsRoutedVoiceDry(t *testing.T) {
+	filtered := renderVoice1LowpassAudition(false)
+	dry := renderVoice1LowpassAudition(true)
+
+	filteredRMS := rms(filtered[2000:])
+	dryRMS := rms(dry[2000:])
+	if dryRMS < filteredRMS*1.5 {
+		t.Fatalf("filter bypass RMS %.2f should exceed filtered RMS %.2f", dryRMS, filteredRMS)
+	}
+}
+
 func TestCutoffCurvesAreModelSpecific(t *testing.T) {
 	mos6581 := NewWithModel(44100, 985248, Model6581)
 	mos8580 := NewWithModel(44100, 985248, Model8580)
@@ -360,6 +397,24 @@ func renderVoice3WithRoute(routeThroughFilter bool) []int16 {
 		chip.Write(0x18, 0x8f) // voice3-off + volume
 	}
 	pcm := make([]int16, sampleRate/2)
+	chip.RenderMono(pcm)
+	return pcm
+}
+
+func renderVoice1LowpassAudition(filterBypass bool) []int16 {
+	const sampleRate = 44100
+	chip := NewWithModel(sampleRate, 985248, Model8580)
+	chip.SetFilterBypass(filterBypass)
+	chip.Write(0x00, 0x00)
+	chip.Write(0x01, 0x80)
+	chip.Write(0x04, 0x21) // voice 1 saw + gate
+	chip.Write(0x05, 0x00)
+	chip.Write(0x06, 0xf0)
+	chip.Write(0x15, 0x00)
+	chip.Write(0x16, 0x04)
+	chip.Write(0x17, 0x01) // route voice 1 through filter
+	chip.Write(0x18, 0x1f) // lowpass + volume
+	pcm := make([]int16, sampleRate/3)
 	chip.RenderMono(pcm)
 	return pcm
 }

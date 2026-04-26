@@ -42,6 +42,8 @@ For development from a checkout:
 ```sh
 go run ./cmd/zmk-sid play path/to/tune.sid
 go run ./cmd/zmk-sid info path/to/tune.sid
+go run ./cmd/zmk-sid duration path/to/tune.sid
+go run ./cmd/zmk-sid duration-validate -songlengths ~/C64Music/DOCUMENTS/Songlengths.md5 path/to/tunes
 go run ./cmd/zmk-sid render -duration 30s -o tune.wav path/to/tune.sid
 go run ./cmd/zmk-sid analyze -duration 30s path/to/tune.sid
 ```
@@ -95,8 +97,10 @@ Useful flags:
 -quiet          # suppress status output
 ```
 
-By default `play` streams audio, applies short fades to avoid edge clicks, and
-shows elapsed progress on interactive terminals.
+By default `play` estimates the selected subtune duration with a bounded
+heuristic pass, streams audio, applies short fades to avoid edge clicks, and
+shows elapsed progress on interactive terminals. If no confident duration is
+found, it falls back to a 3 minute play span. Pass `-duration` to override this.
 
 On macOS, playback uses the Go audio backend directly. On Linux, the default
 build streams raw PCM to common system players (`aplay`, `ffplay`, `paplay`,
@@ -124,6 +128,35 @@ factor, and zero crossings. It accepts SID files or mono 16-bit WAV files:
 zmk-sid analyze -duration 30s Commando.sid
 zmk-sid analyze tune.wav
 ```
+
+### `duration`
+
+Estimates SID playback length without a songlength database:
+
+```sh
+zmk-sid duration Commando.sid
+zmk-sid duration -all Commando.sid
+zmk-sid duration -budget 3s -max 8m Commando.sid
+```
+
+The heuristic renders quickly at a low sample rate, watches SID register/audio
+fingerprints for repeated windows, and also detects trailing silence. Results
+include the source, confidence, simulated span, and reason. This is a fallback,
+not a replacement for HVSC `Songlengths` data.
+
+To compare the heuristic against an HVSC songlength database:
+
+```sh
+zmk-sid duration-validate \
+  -songlengths ~/C64Music/DOCUMENTS/Songlengths.md5 \
+  -threshold 5s \
+  ~/C64Music/MUSICIANS/H/Hubbard_Rob
+```
+
+By default the validator prints mismatches, unknown estimates, missing database
+entries, and errors. Add `-show-ok` to print every compared subtune. The current
+parser supports the modern HVSC `Songlengths.md5` format, where entries are
+looked up by MD5 over the full SID file content including the header.
 
 ## Go Library
 
@@ -199,11 +232,91 @@ SID files do not carry reliable song lengths, so streaming is intentionally
 open-ended. The caller decides duration, seeking policy, looping, fade-out,
 buffer size, and audio-device integration.
 
+### Estimate Duration
+
+Use `EstimateDuration` when no HVSC songlength database entry is available and
+you still want a better default than a fixed play span:
+
+```go
+estimate, err := sid.EstimateDuration(tune, sid.DurationEstimateOptions{
+	Subtune:         1,
+	MaxDuration:     8 * time.Minute,
+	WallClockBudget: 3 * time.Second,
+	SampleRate:      8000,
+})
+if err != nil {
+	return err
+}
+
+if estimate.Source != sid.DurationUnknown {
+	fmt.Println(estimate.Duration, estimate.Source, estimate.Confidence)
+}
+```
+
+The estimate is intentionally conservative. It can report loop detection,
+trailing-silence detection, or `unknown` when the scan budget ends without a
+confident signal.
+
+For HVSC databases, load `Songlengths.md5` and look up entries by the modern
+full-content fingerprint:
+
+```go
+db, err := sid.LoadSonglengthDatabase("/path/to/Songlengths.md5")
+if err != nil {
+	return err
+}
+
+entry, ok := db.LookupTune(tune)
+if ok && len(entry.Lengths) >= int(tune.StartSong) {
+	fmt.Println(entry.Lengths[tune.StartSong-1])
+}
+```
+
+### Debug and Trace Streams
+
+Use `NewDebugStream` for learning tools, inspectors, and WASM frontends that
+need bounded trace events or snapshots. The normal `NewStream` path remains the
+fast playback API.
+
+```go
+debug, err := sid.NewDebugStream(tune, sid.DebugOptions{
+	Subtune:        1,
+	SampleRate:     44100,
+	TraceMask:      sid.TraceFrames | sid.TraceCPUSteps | sid.TraceSIDWrites,
+	MaxTraceEvents: 4096,
+})
+if err != nil {
+	return err
+}
+
+framePCM, err := debug.StepFrame()
+if err != nil {
+	return err
+}
+_ = framePCM
+
+events, info := debug.ReadTrace(256, 0)
+snapshot := debug.Snapshot()
+_ = events
+_ = info
+_ = snapshot
+```
+
+Trace buffers are fixed-size and report dropped events. `DebugStream` also
+supports `ReadSamples` for normal chunked rendering, `StepFrame` for frame-level
+inspection, and `StepInstruction` for direct `play` address and IRQ-driven
+tunes.
+
 ### Choosing an API
 
 - Use `LoadFile` or `Parse` to read SID data.
 - Use `Render` for bounded, offline work.
 - Use `NewStream` and `ReadSamples` for real-time playback and app integration.
+- Use `EstimateDuration` as a fallback when no external songlength metadata is
+  available.
+- Use `LoadSonglengthDatabase` when an HVSC `Songlengths.md5` file is available.
+- Use `NewDebugStream` for bounded trace events, snapshots, and educational
+  stepping tools.
 - Use `SamplesToPCM16LE` when an audio backend expects little-endian PCM bytes.
 - Use `WriteWAV`, `ReadWAV`, and `AnalyzePCM16` for tooling and tests.
 

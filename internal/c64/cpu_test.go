@@ -27,6 +27,30 @@ func TestRunSubroutineStoresResult(t *testing.T) {
 	}
 }
 
+func TestStepWithInfoReportsInstruction(t *testing.T) {
+	bus := NewBus(sid.New(44100, 985248))
+	program := []byte{
+		0xa9, 0x7f, // LDA #$7f
+		0x60, // RTS
+	}
+	if err := bus.Load(0x0800, program); err != nil {
+		t.Fatal(err)
+	}
+
+	cpu := NewCPU(bus)
+	cpu.PC = 0x0800
+	info, err := cpu.StepWithInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.PC != 0x0800 || info.Opcode != 0xa9 || info.Mnemonic != "LDA" || info.Cycles != 2 {
+		t.Fatalf("step info = pc $%04x opcode $%02x mnemonic %q cycles %d", info.PC, info.Opcode, info.Mnemonic, info.Cycles)
+	}
+	if cpu.A != 0x7f {
+		t.Fatalf("A = $%02x, want $7f", cpu.A)
+	}
+}
+
 func TestRunSubroutineNestedJSR(t *testing.T) {
 	bus := NewBus(sid.New(44100, 985248))
 	program := []byte{
