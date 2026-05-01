@@ -208,11 +208,10 @@ return sid.WriteWAV("preview.wav", 44100, pcm)
 
 ### Sound Profiles
 
-The default sound is the built-in `balanced` profile. For 6581 playback this is
-currently the promoted `zmk-optimize` filter-focused profile from the no-prune
-global optimizer run. Tools such as `zmk-optimize` can still emit JSON profile
-candidates, and callers can pass those profiles into the renderer without
-changing Go constants:
+The default sound is the built-in `balanced` profile. For how the current
+filter profile and BASIC timing defaults were calibrated, see
+[docs/filter-and-timings.md](docs/filter-and-timings.md). Callers can pass JSON
+profile candidates into the renderer without changing Go constants:
 
 ```go
 soundProfile, err := sid.LoadSoundProfile("profile-candidate.json")
