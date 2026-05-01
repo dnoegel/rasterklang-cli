@@ -4,3 +4,6 @@
 .devcontainer/.local/
 aib.yml
 dist/
+hvsc-compat-failures.tsv
+docs/labeling-feasibility.md
+docs/superpowers/
