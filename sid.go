@@ -7,6 +7,7 @@ import (
 	"github.com/dnoegel/zmk-sid/internal/sidfile"
 	"github.com/dnoegel/zmk-sid/internal/songlength"
 	"github.com/dnoegel/zmk-sid/internal/wav"
+	sidprofile "github.com/dnoegel/zmk-sid/profile"
 )
 
 type (
@@ -22,6 +23,10 @@ type (
 	// Model describes the preferred SID chip model.
 	Model = sidfile.Model
 
+	// TuneType is a high-level, filterable tune label such as RSID, BASIC,
+	// Magic Voice, Electronic Speech Systems, or Sound Master.
+	TuneType = sidfile.TuneType
+
 	// RenderOptions controls SID-to-PCM rendering.
 	RenderOptions = engine.RenderOptions
 
@@ -30,6 +35,9 @@ type (
 
 	// AudioControls applies listener-facing audition controls during rendering.
 	AudioControls = engine.AudioControls
+
+	// SoundProfile controls SID mixer, waveform, filter and output coloration.
+	SoundProfile = sidprofile.Profile
 
 	// DurationEstimateOptions controls heuristic SID duration estimation.
 	DurationEstimateOptions = engine.DurationEstimateOptions
@@ -87,7 +95,21 @@ type (
 
 	// PCM16 contains mono 16-bit WAV audio.
 	PCM16 = wav.PCM16
+
+	// FailurePhase identifies the engine phase that produced a playback error.
+	FailurePhase = engine.FailurePhase
+
+	// FailureKind classifies a playback error for compatibility reporting.
+	FailureKind = engine.FailureKind
+
+	// FailureContext contains structured details for a playback error.
+	FailureContext = engine.FailureContext
+
+	// FailureError wraps engine playback errors with structured diagnostics.
+	FailureError = engine.FailureError
 )
+
+const SoundProfileSchemaVersion = sidprofile.SchemaVersion
 
 const (
 	FormatPSID = sidfile.FormatPSID
@@ -103,6 +125,22 @@ const (
 	Model8580    = sidfile.Model8580
 	ModelAny     = sidfile.ModelAny
 
+	TuneTypePSID                 = sidfile.TuneTypePSID
+	TuneTypeRSID                 = sidfile.TuneTypeRSID
+	TuneTypeBASIC                = sidfile.TuneTypeBASIC
+	TuneTypeMUS                  = sidfile.TuneTypeMUS
+	TuneTypePlaySIDSpecific      = sidfile.TuneTypePlaySIDSpecific
+	TuneTypeSpeechExtension      = sidfile.TuneTypeSpeechExtension
+	TuneTypeExternalSpeech       = sidfile.TuneTypeExternalSpeech
+	TuneTypeMagicVoice           = sidfile.TuneTypeMagicVoice
+	TuneTypeSAMReciter           = sidfile.TuneTypeSAMReciter
+	TuneTypeC64SpeechSystem      = sidfile.TuneTypeC64SpeechSystem
+	TuneTypeElectronicSpeech     = sidfile.TuneTypeElectronicSpeech
+	TuneTypeSoundMaster          = sidfile.TuneTypeSoundMaster
+	TuneTypeSySound              = sidfile.TuneTypeSySound
+	TuneTypeMusicExpansion       = sidfile.TuneTypeMusicExpansion
+	TuneTypeCustomBASICExtension = sidfile.TuneTypeCustomBASICExtension
+
 	DurationFromDatabase = engine.DurationFromDatabase
 	DurationEstimated    = engine.DurationEstimated
 	DurationLoopDetected = engine.DurationLoopDetected
@@ -114,6 +152,23 @@ const (
 	TraceSIDWrites = engine.TraceSIDWrites
 	TraceSIDReads  = engine.TraceSIDReads
 	TraceAudio     = engine.TraceAudio
+	TraceBASIC     = engine.TraceBASIC
+
+	FailurePhaseValidate = engine.FailurePhaseValidate
+	FailurePhaseLoad     = engine.FailurePhaseLoad
+	FailurePhaseInit     = engine.FailurePhaseInit
+	FailurePhasePlay     = engine.FailurePhasePlay
+	FailurePhaseIRQ      = engine.FailurePhaseIRQ
+
+	FailureKindBasicRSID         = engine.FailureKindBasicRSID
+	FailureKindCycleLimit        = engine.FailureKindCycleLimit
+	FailureKindBRK               = engine.FailureKindBRK
+	FailureKindCPUHalt           = engine.FailureKindCPUHalt
+	FailureKindUnsupportedOpcode = engine.FailureKindUnsupportedOpcode
+	FailureKindROMEntry          = engine.FailureKindROMEntry
+	FailureKindNoIRQVector       = engine.FailureKindNoIRQVector
+	FailureKindUnsupportedTune   = engine.FailureKindUnsupportedTune
+	FailureKindOther             = engine.FailureKindOther
 )
 
 // LoadFile reads and parses a PSID/RSID file from disk.
@@ -124,6 +179,21 @@ func LoadFile(path string) (*Tune, error) {
 // Parse parses PSID/RSID data from memory.
 func Parse(data []byte) (*Tune, error) {
 	return sidfile.Parse(data)
+}
+
+// LoadSoundProfile reads and validates a JSON sound profile from disk.
+func LoadSoundProfile(path string) (SoundProfile, error) {
+	return sidprofile.Load(path)
+}
+
+// ParseSoundProfile validates a JSON sound profile from memory.
+func ParseSoundProfile(data []byte) (SoundProfile, error) {
+	return sidprofile.Parse(data)
+}
+
+// BuiltinSoundProfile returns a bundled sound profile by name.
+func BuiltinSoundProfile(name string) (SoundProfile, error) {
+	return sidprofile.Builtin(name)
 }
 
 // Render turns a parsed tune into mono 16-bit PCM samples.

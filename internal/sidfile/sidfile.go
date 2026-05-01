@@ -45,12 +45,15 @@ type Tune struct {
 	Version    uint16
 	DataOffset uint16
 
-	LoadAddress uint16
-	InitAddress uint16
-	PlayAddress uint16
-	Songs       uint16
-	StartSong   uint16
-	Speed       uint32
+	LoadAddress       uint16
+	InitAddress       uint16
+	PlayAddress       uint16
+	HeaderLoadAddress uint16
+	HeaderInitAddress uint16
+	HeaderPlayAddress uint16
+	Songs             uint16
+	StartSong         uint16
+	Speed             uint32
 
 	Title    string
 	Author   string
@@ -104,6 +107,9 @@ func Parse(data []byte) (*Tune, error) {
 		Clock:       ClockUnknown,
 		SIDModel:    ModelUnknown,
 	}
+	t.HeaderLoadAddress = t.LoadAddress
+	t.HeaderInitAddress = t.InitAddress
+	t.HeaderPlayAddress = t.PlayAddress
 
 	if t.Version == 0 || t.Version > 4 {
 		return nil, fmt.Errorf("sidfile: unsupported version %d", t.Version)
@@ -161,9 +167,6 @@ func Parse(data []byte) (*Tune, error) {
 func (t *Tune) ValidateForPOC() error {
 	if t.MUS {
 		return errors.New("Compute!'s MUS files are not supported by the POC engine")
-	}
-	if t.Format == FormatRSID && t.Basic {
-		return errors.New("BASIC RSID tunes are not supported by the POC engine yet")
 	}
 	if t.PlayAddress == 0 && t.InitAddress == 0 {
 		return errors.New("interrupt-driven tunes need a non-zero init address")

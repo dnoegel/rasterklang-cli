@@ -1,6 +1,11 @@
 package sid
 
-import "math"
+import (
+	"fmt"
+	"math"
+
+	sidprofile "github.com/dnoegel/zmk-sid/profile"
+)
 
 const registerCount = 0x20
 
@@ -28,6 +33,7 @@ type Chip struct {
 	filterBypass bool
 	output       outputStage
 	volume       volumeDACState
+	profile      soundProfile
 }
 
 type voice struct {
@@ -75,18 +81,33 @@ type mixerProfile struct {
 }
 
 type filterProfile struct {
-	inputGain      float64
-	inputDrive     float64
-	feedbackDrive  float64
-	asymmetry      float64
-	resonanceCurve float64
-	dampingBase    float64
-	dampingDepth   float64
-	dampingMin     float64
-	lowGain        float64
-	bandGain       float64
-	highGain       float64
-	outputGain     float64
+	inputGain       float64
+	inputDrive      float64
+	feedbackDrive   float64
+	asymmetry       float64
+	resonanceCurve  float64
+	dampingBase     float64
+	dampingDepth    float64
+	dampingMin      float64
+	lowGain         float64
+	bandGain        float64
+	highGain        float64
+	lowTiltBaseDB   float64
+	lowTiltDB       float64
+	lowTiltQuadDB   float64
+	lowResDB        float64
+	lowCutoffResDB  float64
+	bandTiltBaseDB  float64
+	bandTiltDB      float64
+	bandTiltQuadDB  float64
+	bandResDB       float64
+	bandCutoffResDB float64
+	highTiltBaseDB  float64
+	highTiltDB      float64
+	highTiltQuadDB  float64
+	highResDB       float64
+	highCutoffResDB float64
+	outputGain      float64
 }
 
 type outputProfile struct {
@@ -95,6 +116,36 @@ type outputProfile struct {
 	highpassHz   float64
 	drive        float64
 	asymmetry    float64
+}
+
+type waveformProfile struct {
+	triangleSawBleed  float64
+	voiceDACLowpassHz float64
+}
+
+type cutoffProfile struct {
+	dacRatio     float64
+	baseHz       float64
+	rangeHz      float64
+	exponent     float64
+	rippleAmount float64
+	ripplePeriod float64
+	points       []cutoffPoint
+}
+
+type cutoffPoint struct {
+	raw uint16
+	hz  float64
+}
+
+type soundProfile struct {
+	mixer          mixerProfile
+	filter         filterProfile
+	output         outputProfile
+	waveform       waveformProfile
+	cutoff         cutoffProfile
+	outputGain     float64
+	volumeDACLevel float64
 }
 
 type outputStage struct {
@@ -159,6 +210,7 @@ func NewWithModel(sampleRate int, cpuHz float64, model Model) *Chip {
 		model:      model,
 		oversample: oversample,
 		voiceMask:  0x07,
+		profile:    defaultSoundProfile(model),
 	}
 	for i := range c.voices {
 		c.voices[i].noise = uint32(0x7ffff8 + i*0x1f123)
@@ -317,7 +369,7 @@ func (c *Chip) sample() float64 {
 	filterSelect := c.regs[0x17] & 0x07
 	mode := c.regs[0x18] & 0x70
 	voice3Off := c.regs[0x18]&0x80 != 0
-	mix := c.mixerProfile()
+	mix := c.profile.mixer
 	filteredInput := 0.0
 	bypass := 0.0
 	for i, sample := range voiceOut {
@@ -352,7 +404,8 @@ func (c *Chip) sample() float64 {
 	}
 
 	volume := float64(c.regs[0x18]&0x0f) / 15.0
-	filtered := c.filter.apply(filteredInput, c.cutoffHz(), c.resonance(), c.regs[0x18], c.sampleRate, c.model)
+	cutoffRaw := c.cutoffRaw()
+	filtered := c.filter.apply(filteredInput, c.cutoffHzFromRaw(cutoffRaw), cutoffRaw, c.resonance(), c.regs[0x18], c.sampleRate, c.profile.filter)
 	if c.filterBypass {
 		filtered = 0
 	}
@@ -360,7 +413,7 @@ func (c *Chip) sample() float64 {
 	// for samples; the high-pass below removes the static DC but preserves moves.
 	volumeDAC := c.volumeDACOutput(volume)
 	mixed := analogSaturate((bypass+filtered)*volume, mix.mixerDrive, mix.mixerAsym) * c.outputGain()
-	return c.output.apply(mixed+volumeDAC, c.sampleRate, c.model)
+	return c.output.apply(mixed+volumeDAC, c.sampleRate, c.profile.output)
 }
 
 func (c *Chip) sampleVoice(i int) float64 {
@@ -415,15 +468,16 @@ func (c *Chip) waveform(i int, v *voice, control byte, pulseWidth uint16, step u
 		return out
 	}
 	if control&0x10 != 0 {
-		x := float64(phase24) / float64(1<<24)
-		if x >= 0.5 {
-			x = 1 - x
-		}
-		tri := x*4 - 1
+		raw := triangleWaveRaw(phase24)
 		if control&0x04 != 0 && c.voices[(i+2)%3].phase&0x80000000 != 0 {
-			tri = -tri
+			raw = 0x0fff - raw
 		}
-		tri = c.triangleDAC(c.waveDAC((tri + 1) * 0.5))
+		tri := c.triangleDAC(c.waveDAC(float64(raw) / 4095.0))
+		if c.model == Model6581 && c.profile.waveform.triangleSawBleed > 0 {
+			sawBleed := c.waveDAC(float64(sawWaveRaw(phase24)) / 4095.0)
+			bleed := clamp(c.profile.waveform.triangleSawBleed, 0, 1)
+			tri = clamp(tri*(1-bleed)+sawBleed*bleed, -1, 1)
+		}
 		waves = append(waves, tri)
 	}
 	if control&0x20 != 0 {
@@ -471,6 +525,18 @@ func (c *Chip) pulseSawWave(phaseIndex uint32, pulseWidth uint16) float64 {
 	}
 	raw := c.combinedPulseSawRaw(uint16(phaseIndex))
 	return c.waveDAC(float64(raw) / 4095.0)
+}
+
+func sawWaveRaw(phase24 uint32) uint16 {
+	return uint16((phase24 >> 12) & 0x0fff)
+}
+
+func triangleWaveRaw(phase24 uint32) uint16 {
+	raw := (phase24 >> 11) & 0x0fff
+	if phase24&0x800000 != 0 {
+		raw = (^raw) & 0x0fff
+	}
+	return uint16(raw)
 }
 
 func controlChangeCanClick(old, value byte) bool {
@@ -524,9 +590,9 @@ func (c *Chip) applyVoiceDeclick(v *voice, target float64) float64 {
 func (c *Chip) triangleDAC(v float64) float64 {
 	v = clamp(v, -1, 1)
 	if c.model == Model8580 {
-		return v - 0.08*v*v*v
+		return v - 0.04*v*v*v
 	}
-	return v - 0.16*v*v*v
+	return v
 }
 
 func (c *Chip) waveDAC(raw float64) float64 {
@@ -575,9 +641,9 @@ func (c *Chip) applyVoiceDAC(v *voice, target float64) float64 {
 		v.dacInitialized = true
 		return target
 	}
-	cutoff := 11500.0
-	if c.model == Model6581 {
-		cutoff = 8200.0
+	cutoff := c.profile.waveform.voiceDACLowpassHz
+	if cutoff <= 0 {
+		cutoff = 11500
 	}
 	if cutoff > c.sampleRate*0.45 {
 		cutoff = c.sampleRate * 0.45
@@ -680,18 +746,20 @@ func exponentialPeriod(level byte) int {
 }
 
 func (c *Chip) cutoffHz() float64 {
-	raw := c.cutoffRaw()
-	if c.model == Model8580 {
-		x := cutoffDAC(raw, 11, 2.0)
-		return 30 + math.Pow(x, 1.08)*12500
+	return c.cutoffHzFromRaw(c.cutoffRaw())
+}
+
+func (c *Chip) cutoffHzFromRaw(raw uint16) float64 {
+	profile := c.profile.cutoff
+	if len(profile.points) >= 2 {
+		return cutoffPointHz(raw, profile.points)
 	}
-	// 6581 filters vary heavily chip-to-chip. A mildly non-ideal DAC curve keeps
-	// the low end dark, gives high settings enough reach, and avoids a too-linear
-	// sweep that makes filter-heavy tunes sound sterile.
-	x := cutoffDAC(raw, 11, 2.08)
-	shaped := math.Pow(x, 1.55)
-	shaped += 0.018 * math.Sin(float64(raw)*math.Pi/128.0) * x * (1 - x)
-	return 180 + clamp(shaped, 0, 1)*18500
+	x := cutoffDAC(raw, 11, profile.dacRatio)
+	shaped := math.Pow(x, profile.exponent)
+	if profile.rippleAmount != 0 && profile.ripplePeriod != 0 {
+		shaped += profile.rippleAmount * math.Sin(float64(raw)*math.Pi/profile.ripplePeriod) * x * (1 - x)
+	}
+	return profile.baseHz + clamp(shaped, 0, 1)*profile.rangeHz
 }
 
 func (c *Chip) cutoffRaw() uint16 {
@@ -702,9 +770,8 @@ func (c *Chip) resonance() float64 {
 	return float64((c.regs[0x17]>>4)&0x0f) / 15.0
 }
 
-func (f *filterState) apply(input float64, cutoffHz float64, resonance float64, modeVol byte, sampleRate float64, model Model) float64 {
+func (f *filterState) apply(input float64, cutoffHz float64, cutoffRaw uint16, resonance float64, modeVol byte, sampleRate float64, profile filterProfile) float64 {
 	mode := modeVol & 0x70
-	profile := filterProfileFor(model)
 	cutoff := clamp(cutoffHz, 20, sampleRate*0.45)
 	g := math.Tan(math.Pi * cutoff / sampleRate)
 	res := math.Pow(clamp(resonance, 0, 1), profile.resonanceCurve)
@@ -733,20 +800,52 @@ func (f *filterState) apply(input float64, cutoffHz float64, resonance float64, 
 
 	out := 0.0
 	if mode&0x10 != 0 {
+		if profile.lowTiltDB != 0 || profile.lowTiltBaseDB != 0 || profile.lowTiltQuadDB != 0 || profile.lowResDB != 0 || profile.lowCutoffResDB != 0 {
+			low *= dbToLinear(responseDB(
+				cutoffRaw,
+				resonance,
+				profile.lowTiltBaseDB,
+				profile.lowTiltDB,
+				profile.lowTiltQuadDB,
+				profile.lowResDB,
+				profile.lowCutoffResDB,
+			))
+		}
 		out += low * profile.lowGain
 	}
 	if mode&0x20 != 0 {
+		if profile.bandTiltDB != 0 || profile.bandTiltBaseDB != 0 || profile.bandTiltQuadDB != 0 || profile.bandResDB != 0 || profile.bandCutoffResDB != 0 {
+			band *= dbToLinear(responseDB(
+				cutoffRaw,
+				resonance,
+				profile.bandTiltBaseDB,
+				profile.bandTiltDB,
+				profile.bandTiltQuadDB,
+				profile.bandResDB,
+				profile.bandCutoffResDB,
+			))
+		}
 		out += band * profile.bandGain
 	}
 	if mode&0x40 != 0 {
+		if profile.highTiltDB != 0 || profile.highTiltBaseDB != 0 || profile.highTiltQuadDB != 0 || profile.highResDB != 0 || profile.highCutoffResDB != 0 {
+			high *= dbToLinear(responseDB(
+				cutoffRaw,
+				resonance,
+				profile.highTiltBaseDB,
+				profile.highTiltDB,
+				profile.highTiltQuadDB,
+				profile.highResDB,
+				profile.highCutoffResDB,
+			))
+		}
 		out += high * profile.highGain
 	}
 	// Filtered output is polarity-inverted relative to direct voice mixer output.
 	return -out * profile.outputGain
 }
 
-func (o *outputStage) apply(input float64, sampleRate float64, model Model) float64 {
-	profile := outputProfileFor(model)
+func (o *outputStage) apply(input float64, sampleRate float64, profile outputProfile) float64 {
 	input = analogSaturate(input, profile.drive, profile.asymmetry)
 	if !o.initialized {
 		o.lp = input
@@ -973,17 +1072,11 @@ func RegisterName(reg byte) string {
 }
 
 func (c *Chip) outputGain() float64 {
-	if c.model == Model8580 {
-		return 0.74
-	}
-	return 0.72
+	return c.profile.outputGain
 }
 
 func (c *Chip) volumeDACLevel() float64 {
-	if c.model == Model8580 {
-		return 0.045
-	}
-	return 0.12
+	return c.profile.volumeDACLevel
 }
 
 func (c *Chip) volumeDACOutput(volume float64) float64 {
@@ -1029,68 +1122,216 @@ func (v *volumeDACState) apply(target float64, sampleRate float64) float64 {
 	return v.current
 }
 
-func (c *Chip) mixerProfile() mixerProfile {
-	if c.model == Model8580 {
-		return mixerProfile{
+func defaultSoundProfile(model Model) soundProfile {
+	if model == Model8580 {
+		return soundProfile{
+			mixer: mixerProfile{
+				voiceGain:     0.24,
+				filterLeakage: 0.002,
+				mixerDrive:    1.00,
+			},
+			filter: filterProfile{
+				inputGain:      0.96,
+				resonanceCurve: 1.05,
+				dampingBase:    1.18,
+				dampingDepth:   0.82,
+				dampingMin:     0.20,
+				lowGain:        1.00,
+				bandGain:       0.96,
+				highGain:       0.96,
+				outputGain:     0.94,
+			},
+			output: outputProfile{
+				lowpassHz:    16500,
+				lowpassPoles: 1,
+				highpassHz:   16,
+				drive:        1.02,
+			},
+			waveform: waveformProfile{
+				voiceDACLowpassHz: 11500,
+			},
+			cutoff: cutoffProfile{
+				dacRatio: 2.0,
+				baseHz:   30,
+				rangeHz:  12500,
+				exponent: 1.08,
+			},
+			outputGain:     0.74,
+			volumeDACLevel: 0.045,
+		}
+	}
+	return soundProfile{
+		mixer: mixerProfile{
 			voiceGain:     0.24,
-			filterLeakage: 0.002,
+			filterLeakage: 0.015082116811475173,
 			mixerDrive:    1.00,
-		}
-	}
-	return mixerProfile{
-		voiceGain:     0.24,
-		filterLeakage: 0.014,
-		mixerDrive:    1.00,
-		mixerAsym:     0.025,
-	}
-}
-
-func filterProfileFor(model Model) filterProfile {
-	if model == Model8580 {
-		return filterProfile{
-			inputGain:      0.96,
-			resonanceCurve: 1.05,
-			dampingBase:    1.18,
-			dampingDepth:   0.82,
-			dampingMin:     0.20,
-			lowGain:        1.00,
-			bandGain:       0.96,
-			highGain:       0.96,
-			outputGain:     0.94,
-		}
-	}
-	return filterProfile{
-		inputGain:      1.02,
-		inputDrive:     1.35,
-		feedbackDrive:  1.05,
-		asymmetry:      0.055,
-		resonanceCurve: 0.82,
-		dampingBase:    1.34,
-		dampingDepth:   0.92,
-		dampingMin:     0.26,
-		lowGain:        0.74,
-		bandGain:       0.68,
-		highGain:       0.82,
-		outputGain:     0.84,
-	}
-}
-
-func outputProfileFor(model Model) outputProfile {
-	if model == Model8580 {
-		return outputProfile{
-			lowpassHz:    16500,
+			mixerAsym:     0.025,
+		},
+		filter: filterProfile{
+			inputGain:       0.9963132996971859,
+			inputDrive:      1.320712385859198,
+			feedbackDrive:   1.1587833070435212,
+			asymmetry:       0.05421253697200597,
+			resonanceCurve:  0.8580932179643984,
+			dampingBase:     1.2406493083693069,
+			dampingDepth:    1.0476038210428855,
+			dampingMin:      0.26,
+			lowGain:         0.6211262552855417,
+			bandGain:        1.0477096246906958,
+			highGain:        0.4845082163881435,
+			lowTiltBaseDB:   -0.03950427194624717,
+			lowTiltDB:       -0.3984394735507245,
+			lowTiltQuadDB:   0.1627007540741179,
+			lowResDB:        -0.3226108476855678,
+			lowCutoffResDB:  0.01999303651203721,
+			bandTiltBaseDB:  -3.469879276793827,
+			bandTiltDB:      5.748160576283635,
+			bandTiltQuadDB:  4.525428293231677,
+			bandResDB:       -2.545805321184986,
+			bandCutoffResDB: 6.144363028406277,
+			highTiltBaseDB:  -5.897294016525548,
+			highTiltDB:      9.402263841544364,
+			highTiltQuadDB:  3.503522579997772,
+			highResDB:       0.7822496986831105,
+			highCutoffResDB: 1.9635261901862018,
+			outputGain:      0.8253826424317705,
+		},
+		output: outputProfile{
+			lowpassHz:    15500,
 			lowpassPoles: 1,
-			highpassHz:   16,
-			drive:        1.02,
+			highpassHz:   18,
+			drive:        1.0996246030410368,
+			asymmetry:    0.003365598699842914,
+		},
+		waveform: waveformProfile{
+			voiceDACLowpassHz: 11500,
+		},
+		cutoff: cutoffProfile{
+			dacRatio:     2.08,
+			baseHz:       185.79676580810553,
+			rangeHz:      15031.88699720352,
+			exponent:     1.6769207784313238,
+			rippleAmount: 0.018,
+			ripplePeriod: 128,
+		},
+		outputGain:     0.7109613819088534,
+		volumeDACLevel: 0.12,
+	}
+}
+
+func (c *Chip) SetSoundProfile(p sidprofile.Profile) error {
+	resolved, err := resolveSoundProfile(c.model, p)
+	if err != nil {
+		return err
+	}
+	c.profile = resolved
+	return nil
+}
+
+func resolveSoundProfile(model Model, p sidprofile.Profile) (soundProfile, error) {
+	if err := p.Validate(); err != nil {
+		return soundProfile{}, err
+	}
+	if p.ChipModel != "" && p.ChipModel != modelName(model) {
+		return soundProfile{}, fmt.Errorf("sid: profile chipModel %s does not match chip model %s", p.ChipModel, modelName(model))
+	}
+	resolved := defaultSoundProfile(model)
+	if p.Mixer != nil {
+		applyFloat(p.Mixer.VoiceGain, &resolved.mixer.voiceGain)
+		applyFloat(p.Mixer.FilterLeakage, &resolved.mixer.filterLeakage)
+		applyFloat(p.Mixer.Drive, &resolved.mixer.mixerDrive)
+		applyFloat(p.Mixer.Asymmetry, &resolved.mixer.mixerAsym)
+		applyFloat(p.Mixer.OutputGain, &resolved.outputGain)
+		applyFloat(p.Mixer.VolumeDACLevel, &resolved.volumeDACLevel)
+	}
+	if p.Waveform != nil {
+		applyFloat(p.Waveform.TriangleSawBleed, &resolved.waveform.triangleSawBleed)
+		applyFloat(p.Waveform.VoiceDACLowpassHz, &resolved.waveform.voiceDACLowpassHz)
+	}
+	if p.Filter != nil {
+		applyCutoffProfile(p.Filter.Cutoff, &resolved.cutoff)
+		applyFloat(p.Filter.InputGain, &resolved.filter.inputGain)
+		applyFloat(p.Filter.InputDrive, &resolved.filter.inputDrive)
+		applyFloat(p.Filter.FeedbackDrive, &resolved.filter.feedbackDrive)
+		applyFloat(p.Filter.Asymmetry, &resolved.filter.asymmetry)
+		applyFloat(p.Filter.ResonanceCurve, &resolved.filter.resonanceCurve)
+		applyFloat(p.Filter.DampingBase, &resolved.filter.dampingBase)
+		applyFloat(p.Filter.DampingDepth, &resolved.filter.dampingDepth)
+		applyFloat(p.Filter.DampingMin, &resolved.filter.dampingMin)
+		applyFloat(p.Filter.LowGain, &resolved.filter.lowGain)
+		applyFloat(p.Filter.BandGain, &resolved.filter.bandGain)
+		applyFloat(p.Filter.HighGain, &resolved.filter.highGain)
+		applyFloat(p.Filter.OutputGain, &resolved.filter.outputGain)
+		applyModeResponseProfile(p.Filter.ModeResponseDB, &resolved.filter)
+	}
+	if p.Output != nil {
+		applyFloat(p.Output.LowpassHz, &resolved.output.lowpassHz)
+		if p.Output.LowpassPoles != nil {
+			resolved.output.lowpassPoles = *p.Output.LowpassPoles
+		}
+		applyFloat(p.Output.HighpassHz, &resolved.output.highpassHz)
+		applyFloat(p.Output.Drive, &resolved.output.drive)
+		applyFloat(p.Output.Asymmetry, &resolved.output.asymmetry)
+	}
+	return resolved, nil
+}
+
+func applyCutoffProfile(src *sidprofile.Cutoff, dst *cutoffProfile) {
+	if src == nil {
+		return
+	}
+	applyFloat(src.DACRatio, &dst.dacRatio)
+	applyFloat(src.BaseHz, &dst.baseHz)
+	applyFloat(src.RangeHz, &dst.rangeHz)
+	applyFloat(src.Exponent, &dst.exponent)
+	applyFloat(src.RippleAmount, &dst.rippleAmount)
+	applyFloat(src.RipplePeriod, &dst.ripplePeriod)
+	if src.Points != nil {
+		dst.points = make([]cutoffPoint, 0, len(src.Points))
+		for _, point := range src.Points {
+			dst.points = append(dst.points, cutoffPoint{raw: uint16(point.Raw), hz: point.Hz})
 		}
 	}
-	return outputProfile{
-		lowpassHz:    13500,
-		lowpassPoles: 1,
-		highpassHz:   18,
-		drive:        1.04,
-		asymmetry:    0.018,
+}
+
+func applyModeResponseProfile(src *sidprofile.ModeResponseDB, dst *filterProfile) {
+	if src == nil {
+		return
 	}
+	if src.LowPass != nil {
+		applyFloat(src.LowPass.Base, &dst.lowTiltBaseDB)
+		applyFloat(src.LowPass.CutoffLinear, &dst.lowTiltDB)
+		applyFloat(src.LowPass.CutoffQuadratic, &dst.lowTiltQuadDB)
+		applyFloat(src.LowPass.Resonance, &dst.lowResDB)
+		applyFloat(src.LowPass.CutoffResonance, &dst.lowCutoffResDB)
+	}
+	if src.BandPass != nil {
+		applyFloat(src.BandPass.Base, &dst.bandTiltBaseDB)
+		applyFloat(src.BandPass.CutoffLinear, &dst.bandTiltDB)
+		applyFloat(src.BandPass.CutoffQuadratic, &dst.bandTiltQuadDB)
+		applyFloat(src.BandPass.Resonance, &dst.bandResDB)
+		applyFloat(src.BandPass.CutoffResonance, &dst.bandCutoffResDB)
+	}
+	if src.HighPass != nil {
+		applyFloat(src.HighPass.Base, &dst.highTiltBaseDB)
+		applyFloat(src.HighPass.CutoffLinear, &dst.highTiltDB)
+		applyFloat(src.HighPass.CutoffQuadratic, &dst.highTiltQuadDB)
+		applyFloat(src.HighPass.Resonance, &dst.highResDB)
+		applyFloat(src.HighPass.CutoffResonance, &dst.highCutoffResDB)
+	}
+}
+
+func applyFloat(src *float64, dst *float64) {
+	if src != nil {
+		*dst = *src
+	}
+}
+
+func modelName(model Model) string {
+	if model == Model8580 {
+		return "8580"
+	}
+	return "6581"
 }
 
 func cutoffDAC(raw uint16, bits int, ratio float64) float64 {
@@ -1120,6 +1361,43 @@ func analogSaturate(v float64, drive float64, asymmetry float64) float64 {
 	}
 	bias := math.Tanh(asymmetry*drive) / norm
 	return math.Tanh((v+asymmetry)*drive)/norm - bias
+}
+
+func dbToLinear(db float64) float64 {
+	return math.Pow(10, db/20)
+}
+
+func cutoffPointHz(raw uint16, points []cutoffPoint) float64 {
+	if len(points) == 0 {
+		return 0
+	}
+	if raw <= points[0].raw {
+		return points[0].hz
+	}
+	last := points[len(points)-1]
+	if raw >= last.raw {
+		return last.hz
+	}
+	for idx := 1; idx < len(points); idx++ {
+		right := points[idx]
+		if raw > right.raw {
+			continue
+		}
+		left := points[idx-1]
+		span := float64(right.raw - left.raw)
+		if span <= 0 {
+			return right.hz
+		}
+		t := float64(raw-left.raw) / span
+		return left.hz + (right.hz-left.hz)*t
+	}
+	return last.hz
+}
+
+func responseDB(cutoffRaw uint16, resonance float64, baseDB, linearDB, quadDB, resonanceDB, cutoffResDB float64) float64 {
+	x := float64(cutoffRaw) / 2047.0
+	r := clamp(resonance, 0, 1)
+	return baseDB + linearDB*x + quadDB*x*x + resonanceDB*r + cutoffResDB*x*r
 }
 
 func clamp(v, lo, hi float64) float64 {

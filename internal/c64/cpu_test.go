@@ -1,6 +1,7 @@
 package c64
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/dnoegel/zmk-sid/internal/sid"
@@ -73,6 +74,23 @@ func TestRunSubroutineNestedJSR(t *testing.T) {
 	}
 }
 
+func TestRunSubroutineAcceptsReturnInstructionThatCrossesBudget(t *testing.T) {
+	bus := NewBus(sid.New(44100, 985248))
+	program := []byte{
+		0xea, // NOP, total 2 cycles
+		0xea, // NOP, total 4 cycles
+		0x60, // RTS crosses the 5-cycle budget but returns correctly
+	}
+	if err := bus.Load(0x0800, program); err != nil {
+		t.Fatal(err)
+	}
+
+	cpu := NewCPU(bus)
+	if _, err := cpu.RunSubroutine(0x0800, 0, 5); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUndocumentedNOPConsumesOperands(t *testing.T) {
 	bus := NewBus(sid.New(44100, 985248))
 	program := []byte{
@@ -92,6 +110,41 @@ func TestUndocumentedNOPConsumesOperands(t *testing.T) {
 	}
 	if got := bus.RAM[0x2000]; got != 0x42 {
 		t.Fatalf("RAM[$2000] = $%02x, want $42", got)
+	}
+}
+
+func TestKILOpcodeHaltsCPU(t *testing.T) {
+	bus := NewBus(sid.New(44100, 985248))
+	program := []byte{
+		0xa9, 0x7f, // LDA #$7f
+		0x02,       // KIL/JAM
+		0xa9, 0x00, // must not execute
+	}
+	if err := bus.Load(0x0800, program); err != nil {
+		t.Fatal(err)
+	}
+
+	cpu := NewCPU(bus)
+	cpu.PC = 0x0800
+	if _, err := cpu.Step(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := cpu.Step()
+	var halt *CPUHaltError
+	if !errors.As(err, &halt) {
+		t.Fatalf("Step KIL error = %v, want CPUHaltError", err)
+	}
+	if !cpu.Halted {
+		t.Fatal("CPU did not enter halted state")
+	}
+	if cpu.PC != 0x0802 {
+		t.Fatalf("PC = $%04x, want halted opcode $0802", cpu.PC)
+	}
+	if cpu.A != 0x7f {
+		t.Fatalf("A = $%02x, want $7f", cpu.A)
+	}
+	if halt.Mnemonic != "KIL" || halt.Opcode != 0x02 {
+		t.Fatalf("halt = opcode $%02x mnemonic %q, want $02/KIL", halt.Opcode, halt.Mnemonic)
 	}
 }
 
@@ -115,6 +168,50 @@ func TestRunIRQReturnsOnRTI(t *testing.T) {
 	}
 	if cpu.PC != 0x0800 {
 		t.Fatalf("PC = $%04x, want $0800", cpu.PC)
+	}
+}
+
+func TestRunKernalIRQHookReturnsOnRTS(t *testing.T) {
+	bus := NewBus(sid.New(44100, 985248))
+	program := []byte{
+		0xee, 0x00, 0x20, // INC $2000
+		0x60, // RTS back to KERNAL IRQ continuation
+	}
+	if err := bus.Load(0x1000, program); err != nil {
+		t.Fatal(err)
+	}
+
+	cpu := NewCPU(bus)
+	if _, err := cpu.RunKernalIRQHookWithHook(0x1000, 100, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.RAM[0x2000]; got != 1 {
+		t.Fatalf("RAM[$2000] = %d, want 1", got)
+	}
+	if cpu.PC != 0x0000 {
+		t.Fatalf("PC = $%04x, want synthetic subroutine return $0000", cpu.PC)
+	}
+}
+
+func TestRunKernalIRQHookAcceptsRTI(t *testing.T) {
+	bus := NewBus(sid.New(44100, 985248))
+	program := []byte{
+		0xee, 0x00, 0x20, // INC $2000
+		0x40, // RTI used by direct IRQ-style handlers
+	}
+	if err := bus.Load(0x1000, program); err != nil {
+		t.Fatal(err)
+	}
+
+	cpu := NewCPU(bus)
+	if _, err := cpu.RunKernalIRQHookWithHook(0x1000, 100, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.RAM[0x2000]; got != 1 {
+		t.Fatalf("RAM[$2000] = %d, want 1", got)
+	}
+	if cpu.SP != 0xff {
+		t.Fatalf("SP = $%02x, want restored $ff", cpu.SP)
 	}
 }
 

@@ -3,6 +3,8 @@ package sid
 import (
 	"math"
 	"testing"
+
+	sidprofile "github.com/dnoegel/zmk-sid/profile"
 )
 
 func TestSawFrequencyIsInTune(t *testing.T) {
@@ -65,6 +67,48 @@ func TestVolumeDACRampsAfterFirstWrite(t *testing.T) {
 	}
 }
 
+func TestResponseDBIncludesCutoffAndResonanceTerms(t *testing.T) {
+	got := responseDB(2047, 0.5, 1, 2, 4, 8, 16)
+	want := 1.0 + 2.0 + 4.0 + 4.0 + 8.0
+	if math.Abs(got-want) > 1e-9 {
+		t.Fatalf("responseDB = %f, want %f", got, want)
+	}
+}
+
+func TestSoundProfileCanOverrideLowPassResponse(t *testing.T) {
+	chip := NewWithModel(44100, 985248, Model6581)
+	if err := chip.SetSoundProfile(sidprofile.Profile{
+		SchemaVersion: sidprofile.SchemaVersion,
+		ChipModel:     "6581",
+		Filter: &sidprofile.Filter{
+			ModeResponseDB: &sidprofile.ModeResponseDB{
+				LowPass: &sidprofile.ResponseDB{
+					Base: sidprofile.Float64(-6),
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := chip.profile.filter.lowTiltBaseDB, -6.0; got != want {
+		t.Fatalf("low-pass response base = %f, want %f", got, want)
+	}
+}
+
+func TestDefault6581ProfileUsesOptimizedFilterV2Constants(t *testing.T) {
+	chip := NewWithModel(44100, 985248, Model6581)
+	checkFloat(t, "cutoff.baseHz", chip.profile.cutoff.baseHz, 185.79676580810553)
+	checkFloat(t, "cutoff.rangeHz", chip.profile.cutoff.rangeHz, 15031.88699720352)
+	checkFloat(t, "cutoff.exponent", chip.profile.cutoff.exponent, 1.6769207784313238)
+	checkFloat(t, "filter.inputDrive", chip.profile.filter.inputDrive, 1.320712385859198)
+	checkFloat(t, "filter.feedbackDrive", chip.profile.filter.feedbackDrive, 1.1587833070435212)
+	checkFloat(t, "filter.bandTiltDB", chip.profile.filter.bandTiltDB, 5.748160576283635)
+	checkFloat(t, "filter.highTiltDB", chip.profile.filter.highTiltDB, 9.402263841544364)
+	checkFloat(t, "filter.lowTiltDB", chip.profile.filter.lowTiltDB, -0.3984394735507245)
+	checkFloat(t, "output.drive", chip.profile.output.drive, 1.0996246030410368)
+	checkFloat(t, "outputGain", chip.profile.outputGain, 0.7109613819088534)
+}
+
 func TestStaticVolumeDoesNotPopOnFirstSample(t *testing.T) {
 	chip := New(44100, 985248)
 	chip.Write(0x18, 0x0f)
@@ -72,6 +116,13 @@ func TestStaticVolumeDoesNotPopOnFirstSample(t *testing.T) {
 	chip.RenderMono(pcm)
 	if absInt16(pcm[0]) > 32 {
 		t.Fatalf("first sample = %d, want no startup pop", pcm[0])
+	}
+}
+
+func checkFloat(t *testing.T, name string, got, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 1e-12 {
+		t.Fatalf("%s = %.15f, want %.15f", name, got, want)
 	}
 }
 
@@ -103,6 +154,71 @@ func TestPulseComparatorUsesSIDPolarity(t *testing.T) {
 	}
 	if aboveThreshold < 0.55 {
 		t.Fatalf("pulse above threshold = %.4f, want high output", aboveThreshold)
+	}
+}
+
+func TestRawWaveformsUseTopAccumulatorBits(t *testing.T) {
+	if got := sawWaveRaw(0xabc000); got != 0xabc {
+		t.Fatalf("saw raw = $%03x, want $abc", got)
+	}
+	cases := []struct {
+		phase uint32
+		want  uint16
+	}{
+		{phase: 0x000000, want: 0x000},
+		{phase: 0x7ff800, want: 0xfff},
+		{phase: 0x800000, want: 0xfff},
+		{phase: 0xfff800, want: 0x000},
+	}
+	for _, tc := range cases {
+		if got := triangleWaveRaw(tc.phase); got != tc.want {
+			t.Fatalf("triangle raw at $%06x = $%03x, want $%03x", tc.phase, got, tc.want)
+		}
+	}
+}
+
+func Test6581TriangleDefaultsToPureStairStep(t *testing.T) {
+	chip := NewWithModel(44100, 985248, Model6581)
+	voice := &chip.voices[0]
+	voice.phase = uint32(0x200000) << 8
+	pure := chip.triangleDAC(chip.waveDAC(float64(triangleWaveRaw(voice.phase>>8)) / 4095.0))
+	got := chip.waveform(0, voice, 0x10, 0x0800, 0)
+	if got != pure {
+		t.Fatalf("default 6581 triangle = %.4f, want pure stair-step %.4f", got, pure)
+	}
+}
+
+func TestSoundProfileCanAddTriangleBleed(t *testing.T) {
+	chip := NewWithModel(44100, 985248, Model6581)
+	if err := chip.SetSoundProfile(sidprofile.Profile{
+		SchemaVersion: sidprofile.SchemaVersion,
+		ChipModel:     "6581",
+		Waveform: &sidprofile.Waveform{
+			TriangleSawBleed: sidprofile.Float64(0.05),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	voice := &chip.voices[0]
+	voice.phase = uint32(0x200000) << 8
+	pure := chip.triangleDAC(chip.waveDAC(float64(triangleWaveRaw(voice.phase>>8)) / 4095.0))
+	got := chip.waveform(0, voice, 0x10, 0x0800, 0)
+	if got == pure {
+		t.Fatal("profiled triangle should include waveform-color bleed")
+	}
+	if math.Abs(got-pure) > 0.15 {
+		t.Fatalf("triangle bleed too large: got %.4f pure %.4f", got, pure)
+	}
+}
+
+func TestSoundProfileRejectsWrongChipModel(t *testing.T) {
+	chip := NewWithModel(44100, 985248, Model6581)
+	err := chip.SetSoundProfile(sidprofile.Profile{
+		SchemaVersion: sidprofile.SchemaVersion,
+		ChipModel:     "8580",
+	})
+	if err == nil {
+		t.Fatal("expected wrong chip model error")
 	}
 }
 
@@ -217,6 +333,36 @@ func TestCutoffCurvesAreModelSpecific(t *testing.T) {
 
 	if !(mos6581.cutoffHz() > mos8580.cutoffHz()) {
 		t.Fatalf("max cutoff should differ by model: 6581=%.2f 8580=%.2f", mos6581.cutoffHz(), mos8580.cutoffHz())
+	}
+}
+
+func TestCutoffProfilePointsOverridePolynomialCurve(t *testing.T) {
+	chip := NewWithModel(44100, 985248, Model6581)
+	if err := chip.SetSoundProfile(sidprofile.Profile{
+		SchemaVersion: sidprofile.SchemaVersion,
+		Base:          "balanced",
+		ChipModel:     "6581",
+		Filter: &sidprofile.Filter{
+			Cutoff: &sidprofile.Cutoff{
+				Points: []sidprofile.CutoffPoint{
+					{Raw: 0, Hz: 100},
+					{Raw: 1024, Hz: 1100},
+					{Raw: 2047, Hz: 2100},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := chip.cutoffHzFromRaw(0), 100.0; got != want {
+		t.Fatalf("cutoff raw 0 = %.2f, want %.2f", got, want)
+	}
+	if got, want := chip.cutoffHzFromRaw(512), 600.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("cutoff raw 512 = %.2f, want %.2f", got, want)
+	}
+	if got, want := chip.cutoffHzFromRaw(2047), 2100.0; got != want {
+		t.Fatalf("cutoff raw 2047 = %.2f, want %.2f", got, want)
 	}
 }
 
@@ -427,7 +573,7 @@ func filteredSineRMS(resonance float64) float64 {
 	count := 0
 	for i := 0; i < sampleRate/8; i++ {
 		input := 0.08 * math.Sin(2*math.Pi*freq*float64(i)/sampleRate)
-		out := filter.apply(input, freq, resonance, 0x20, sampleRate, Model8580)
+		out := filter.apply(input, freq, 1024, resonance, 0x20, sampleRate, defaultSoundProfile(Model8580).filter)
 		if i > sampleRate/80 {
 			sum += out * out
 			count++

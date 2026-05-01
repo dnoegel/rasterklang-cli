@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dnoegel/zmk-sid/internal/basic"
 	"github.com/dnoegel/zmk-sid/internal/c64"
 	"github.com/dnoegel/zmk-sid/internal/sid"
 	"github.com/dnoegel/zmk-sid/internal/sidfile"
+	sidprofile "github.com/dnoegel/zmk-sid/profile"
 )
 
 type RenderOptions struct {
@@ -17,6 +19,8 @@ type RenderOptions struct {
 	Duration time.Duration
 	// SampleRate is the output sample rate. Zero selects 44100 Hz.
 	SampleRate int
+	// SoundProfile overrides the default balanced SID sound profile.
+	SoundProfile *sidprofile.Profile
 }
 
 type StreamOptions struct {
@@ -24,12 +28,16 @@ type StreamOptions struct {
 	Subtune int
 	// SampleRate is the output sample rate. Zero selects 44100 Hz.
 	SampleRate int
+	// SoundProfile overrides the default balanced SID sound profile.
+	SoundProfile *sidprofile.Profile
 }
 
 type AudioControls struct {
 	VoiceMask    byte
 	FilterBypass bool
 }
+
+const runtimeBudgetFrames = 4
 
 // Stream is a stateful pull renderer for one SID tune/subtune.
 type Stream struct {
@@ -47,11 +55,15 @@ type Stream struct {
 	subCount        int
 	pending         []int16
 	samplePos       int64
+	basic           *basic.Runner
+	continuous      bool
+	idlePlayback    bool
 }
 
 type machineOptions struct {
-	Subtune    int
-	SampleRate int
+	Subtune      int
+	SampleRate   int
+	SoundProfile *sidprofile.Profile
 }
 
 type machineState struct {
@@ -69,13 +81,17 @@ type machineState struct {
 	subCount        int
 	pending         []int16
 	samplePos       int64
+	basic           *basic.Runner
+	continuous      bool
+	idlePlayback    bool
 }
 
 // NewStream initializes a tune and returns a stateful sample renderer.
 func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
 	state, err := newMachineState(tune, machineOptions{
-		Subtune:    opts.Subtune,
-		SampleRate: opts.SampleRate,
+		Subtune:      opts.Subtune,
+		SampleRate:   opts.SampleRate,
+		SoundProfile: opts.SoundProfile,
 	})
 	if err != nil {
 		return nil, err
@@ -90,6 +106,9 @@ func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
 		cyclesPerFrame:  state.cyclesPerFrame,
 		maxPlayCycles:   state.maxPlayCycles,
 		cyclesPerSample: state.cyclesPerSample,
+		basic:           state.basic,
+		continuous:      state.continuous,
+		idlePlayback:    state.idlePlayback,
 	}, nil
 }
 
@@ -98,7 +117,7 @@ func newMachineState(tune *sidfile.Tune, opts machineOptions) (*machineState, er
 		return nil, fmt.Errorf("engine: nil tune")
 	}
 	if err := tune.ValidateForPOC(); err != nil {
-		return nil, err
+		return nil, newFailureError(FailurePhaseValidate, err, FailureContext{})
 	}
 	if opts.Subtune == 0 {
 		opts.Subtune = int(tune.StartSong)
@@ -114,27 +133,112 @@ func newMachineState(tune *sidfile.Tune, opts machineOptions) (*machineState, er
 	}
 
 	chip := sid.NewWithModel(opts.SampleRate, tune.CPUClockHz(), sidModel(tune.SIDModel))
+	if opts.SoundProfile != nil {
+		if err := chip.SetSoundProfile(*opts.SoundProfile); err != nil {
+			return nil, err
+		}
+	}
 	bus := c64.NewBus(chip)
 	initMachine(bus)
 	configureTuneEnvironment(bus, tune)
+	bus.ConfigureVideoTiming(tune.CPUClockHz(), videoRefreshHz(tune))
 	if err := bus.Load(tune.EffectiveLoad, tune.Payload); err != nil {
-		return nil, err
+		return nil, newFailureError(FailurePhaseLoad, err, failureContext(bus, nil, tune, opts.Subtune, 0, tune.EffectiveLoad, 0, 0, 0))
 	}
 
 	cpu := c64.NewCPU(bus)
+	if tune.Basic {
+		program, err := basic.Parse(bus.RAM[:], tune.EffectiveLoad)
+		if err != nil {
+			err = fmt.Errorf("engine: BASIC init failed: %w", err)
+			return nil, newFailureError(FailurePhaseInit, err, failureContext(bus, cpu, tune, opts.Subtune, 0, tune.InitAddress, 0, 0, 0))
+		}
+		configureBASICEnvironment(bus, tune, program, opts.Subtune)
+		cyclesPerFrame := tune.CPUClockHz() / float64(tune.FrameRateForSubtune(opts.Subtune))
+		return &machineState{
+			tune:            tune,
+			chip:            chip,
+			bus:             bus,
+			cpu:             cpu,
+			subtune:         opts.Subtune,
+			sampleRate:      opts.SampleRate,
+			cyclesPerFrame:  cyclesPerFrame,
+			maxPlayCycles:   playCycleBudget(tune, cyclesPerFrame),
+			cyclesPerSample: tune.CPUClockHz() / float64(opts.SampleRate),
+			basic:           basic.NewRunner(program, bus, cpu),
+		}, nil
+	}
 	bus.RAM[0x0001] = bankRegisterForCall(tune.InitAddress)
 	initCycles := int(tune.CPUClockHz() * 2)
-	if _, err := cpu.RunSubroutine(tune.InitAddress, byte(opts.Subtune-1), initCycles); err != nil {
-		var limit *c64.CycleLimitError
-		if _, ok := interruptVector(bus); tune.PlayAddress != 0 || !errors.As(err, &limit) || !ok {
-			return nil, fmt.Errorf("engine: init failed: %w", err)
+	initSIDWrites := 0
+	previousSIDHook := bus.Hooks.OnSIDWrite
+	bus.Hooks.OnSIDWrite = func(reg byte, oldValue byte, value byte) {
+		initSIDWrites++
+		if previousSIDHook != nil {
+			previousSIDHook(reg, oldValue, value)
 		}
 	}
+	cycles, err := cpu.RunSubroutine(tune.InitAddress, byte(opts.Subtune-1), initCycles)
+	bus.Hooks.OnSIDWrite = previousSIDHook
+	if err != nil {
+		var halt *c64.CPUHaltError
+		if tune.PlayAddress == 0 && errors.As(err, &halt) {
+			cyclesPerFrame := tune.CPUClockHz() / float64(tune.FrameRateForSubtune(opts.Subtune))
+			if tune.SpeedForSubtune(opts.Subtune) == 1 {
+				cyclesPerFrame = ciaTimerCycles(bus, cyclesPerFrame)
+			}
+			return &machineState{
+				tune:            tune,
+				chip:            chip,
+				bus:             bus,
+				cpu:             cpu,
+				subtune:         opts.Subtune,
+				sampleRate:      opts.SampleRate,
+				cyclesPerFrame:  cyclesPerFrame,
+				maxPlayCycles:   playCycleBudget(tune, cyclesPerFrame),
+				cyclesPerSample: tune.CPUClockHz() / float64(opts.SampleRate),
+				idlePlayback:    true,
+			}, nil
+		}
+		var limit *c64.CycleLimitError
+		if errors.As(err, &limit) {
+			if tune.PlayAddress != 0 && bus.IsLoaded(tune.PlayAddress) {
+				goto initialized
+			}
+			if tune.PlayAddress == 0 {
+				if _, ok := interruptVector(bus); ok {
+					goto initialized
+				}
+				if initSIDWrites > 0 {
+					cyclesPerFrame := tune.CPUClockHz() / float64(tune.FrameRateForSubtune(opts.Subtune))
+					if tune.SpeedForSubtune(opts.Subtune) == 1 {
+						cyclesPerFrame = ciaTimerCycles(bus, cyclesPerFrame)
+					}
+					return &machineState{
+						tune:            tune,
+						chip:            chip,
+						bus:             bus,
+						cpu:             cpu,
+						subtune:         opts.Subtune,
+						sampleRate:      opts.SampleRate,
+						cyclesPerFrame:  cyclesPerFrame,
+						maxPlayCycles:   playCycleBudget(tune, cyclesPerFrame),
+						cyclesPerSample: tune.CPUClockHz() / float64(opts.SampleRate),
+						continuous:      true,
+					}, nil
+				}
+			}
+		}
+		err = fmt.Errorf("engine: init failed: %w", err)
+		return nil, newFailureError(FailurePhaseInit, err, failureContext(bus, cpu, tune, opts.Subtune, 0, tune.InitAddress, cycles, initCycles, 0))
+	}
 
+initialized:
 	cyclesPerFrame := tune.CPUClockHz() / float64(tune.FrameRateForSubtune(opts.Subtune))
 	if tune.SpeedForSubtune(opts.Subtune) == 1 {
 		cyclesPerFrame = ciaTimerCycles(bus, cyclesPerFrame)
 	}
+	_, hasIRQVector := interruptVector(bus)
 	return &machineState{
 		tune:            tune,
 		chip:            chip,
@@ -143,8 +247,9 @@ func newMachineState(tune *sidfile.Tune, opts machineOptions) (*machineState, er
 		subtune:         opts.Subtune,
 		sampleRate:      opts.SampleRate,
 		cyclesPerFrame:  cyclesPerFrame,
-		maxPlayCycles:   int(cyclesPerFrame) * 2,
+		maxPlayCycles:   playCycleBudget(tune, cyclesPerFrame),
 		cyclesPerSample: tune.CPUClockHz() / float64(opts.SampleRate),
+		idlePlayback:    tune.PlayAddress == 0 && !hasIRQVector && initSIDWrites > 0,
 	}, nil
 }
 
@@ -154,8 +259,9 @@ func Render(tune *sidfile.Tune, opts RenderOptions) ([]int16, error) {
 		return nil, fmt.Errorf("engine: duration must be positive")
 	}
 	stream, err := NewStream(tune, StreamOptions{
-		Subtune:    opts.Subtune,
-		SampleRate: opts.SampleRate,
+		Subtune:      opts.Subtune,
+		SampleRate:   opts.SampleRate,
+		SoundProfile: opts.SoundProfile,
 	})
 	if err != nil {
 		return nil, err
@@ -257,8 +363,21 @@ func (s *Stream) ReadSamples(dst []int16) (int, error) {
 }
 
 func (s *Stream) renderFrame(audio *audioClock) error {
+	if s.continuous {
+		return s.renderContinuousFrame(audio)
+	}
+	if s.idlePlayback {
+		return s.renderIdlePlaybackFrame(audio)
+	}
+	if s.basic != nil {
+		return s.renderBasicFrame(audio)
+	}
+
 	frameCycles := s.cyclesPerFrame
 	usedCycles := 0
+	frameSIDWrites := 0
+	restoreSIDHook := s.countFrameSIDWrites(&frameSIDWrites)
+	defer restoreSIDHook()
 	afterStep := func(cycles int) {
 		usedCycles += cycles
 		audio.addCycles(float64(cycles))
@@ -270,22 +389,194 @@ func (s *Stream) renderFrame(audio *audioClock) error {
 	}()
 	if s.tune.PlayAddress != 0 {
 		s.bus.RAM[0x0001] = bankRegisterForCall(s.tune.PlayAddress)
-		if _, err := s.cpu.RunSubroutineWithHook(s.tune.PlayAddress, s.cpu.A, s.maxPlayCycles, afterStep); err != nil {
-			return fmt.Errorf("engine: play failed near sample %d: %w", s.samplePos+int64(audio.pos), err)
+		if cycles, err := s.cpu.RunSubroutineWithHook(s.tune.PlayAddress, s.cpu.A, s.maxPlayCycles, afterStep); err != nil {
+			if isCPUHalt(err) {
+				s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+				return nil
+			}
+			if frameSIDWrites > 0 && isCycleLimit(err) {
+				s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+				return nil
+			}
+			sample := s.samplePos + int64(audio.pos)
+			err = fmt.Errorf("engine: play failed near sample %d: %w", sample, err)
+			return newFailureError(FailurePhasePlay, err, failureContext(s.bus, s.cpu, s.tune, s.subtune, sample, s.tune.PlayAddress, cycles, s.maxPlayCycles, s.cyclesPerFrame))
 		}
 	} else {
-		vector, ok := interruptVector(s.bus)
-		if !ok {
-			return fmt.Errorf("engine: no IRQ vector installed by init routine")
+		vector := irqVectors(s.bus)
+		if !vector.OK {
+			err := fmt.Errorf("engine: no IRQ vector installed by init routine")
+			return newFailureError(FailurePhaseIRQ, err, failureContext(s.bus, s.cpu, s.tune, s.subtune, s.samplePos+int64(audio.pos), 0, 0, s.maxPlayCycles, s.cyclesPerFrame))
 		}
-		if _, _, err := s.cpu.RunIRQWithHook(vector, s.maxPlayCycles, afterStep); err != nil {
-			return fmt.Errorf("engine: IRQ play failed near sample %d: %w", s.samplePos+int64(audio.pos), err)
+		if cycles, err := s.runInstalledIRQ(vector, afterStep); err != nil {
+			if isCPUHalt(err) {
+				s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+				return nil
+			}
+			if frameSIDWrites > 0 && isCycleLimit(err) {
+				s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+				return nil
+			}
+			sample := s.samplePos + int64(audio.pos)
+			err = fmt.Errorf("engine: IRQ play failed near sample %d: %w", sample, err)
+			return newFailureError(FailurePhaseIRQ, err, failureContext(s.bus, s.cpu, s.tune, s.subtune, sample, vector.Selected, cycles, s.maxPlayCycles, s.cyclesPerFrame))
 		}
 	}
 	if idle := frameCycles - float64(usedCycles); idle > 0 {
 		audio.addCycles(idle)
+		s.bus.AdvanceCycles(roundedCycles(idle))
 	}
 	s.refreshPlaybackTimer()
+	return nil
+}
+
+func (s *Stream) renderIdlePlaybackFrame(audio *audioClock) error {
+	audio.addCycles(s.cyclesPerFrame)
+	s.bus.AdvanceCycles(roundedCycles(s.cyclesPerFrame))
+	s.refreshPlaybackTimer()
+	return nil
+}
+
+func (s *Stream) renderContinuousFrame(audio *audioClock) error {
+	frameCycles := s.cyclesPerFrame
+	usedCycles := 0
+	afterStep := func(cycles int) {
+		usedCycles += cycles
+		audio.addCycles(float64(cycles))
+	}
+	s.bus.DelaySIDWrites = true
+	defer func() {
+		s.bus.FlushSIDWrites()
+		s.bus.DelaySIDWrites = false
+	}()
+	maxCycles := roundedCycles(frameCycles)
+	for usedCycles < maxCycles {
+		if isContinuousSystemExit(s.bus, s.cpu.PC) {
+			s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+			return nil
+		}
+		if s.bus.IsUnloadedROM(s.cpu.PC) {
+			sample := s.samplePos + int64(audio.pos)
+			instErr := &c64.InstructionError{
+				Kind:        "rom_entry",
+				PC:          s.cpu.PC,
+				Opcode:      s.bus.Read(s.cpu.PC),
+				Mnemonic:    c64.Mnemonic(s.bus.Read(s.cpu.PC)),
+				MemoryClass: s.bus.MemoryClass(s.cpu.PC),
+				Loaded:      s.bus.IsLoaded(s.cpu.PC),
+			}
+			err := fmt.Errorf("engine: continuous play failed near sample %d: %w", sample, instErr)
+			return newFailureError(FailurePhasePlay, err, failureContext(s.bus, s.cpu, s.tune, s.subtune, sample, s.cpu.PC, usedCycles, maxCycles, s.cyclesPerFrame))
+		}
+		cycles, err := s.cpu.Step()
+		if err != nil {
+			s.bus.FlushSIDWrites()
+			if isCPUHalt(err) {
+				s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+				return nil
+			}
+			sample := s.samplePos + int64(audio.pos)
+			err = fmt.Errorf("engine: continuous play failed near sample %d: %w", sample, err)
+			return newFailureError(FailurePhasePlay, err, failureContext(s.bus, s.cpu, s.tune, s.subtune, sample, s.cpu.PC, usedCycles, maxCycles, s.cyclesPerFrame))
+		}
+		afterStep(cycles)
+		s.bus.FlushSIDWrites()
+	}
+	if idle := frameCycles - float64(usedCycles); idle > 0 {
+		audio.addCycles(idle)
+		s.bus.AdvanceCycles(roundedCycles(idle))
+	}
+	return nil
+}
+
+func (s *Stream) enterHaltedPlayback(audio *audioClock, frameCycles float64, usedCycles int) {
+	s.continuous = false
+	s.idlePlayback = true
+	s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+}
+
+func (s *Stream) acceptOverrunFrame(audio *audioClock, frameCycles float64, usedCycles int) {
+	if idle := frameCycles - float64(usedCycles); idle > 0 {
+		audio.addCycles(idle)
+		s.bus.AdvanceCycles(roundedCycles(idle))
+	}
+	s.refreshPlaybackTimer()
+}
+
+func isCPUHalt(err error) bool {
+	var halt *c64.CPUHaltError
+	return errors.As(err, &halt)
+}
+
+func isCycleLimit(err error) bool {
+	var limit *c64.CycleLimitError
+	return errors.As(err, &limit)
+}
+
+func (s *Stream) countFrameSIDWrites(count *int) func() {
+	previous := s.bus.Hooks.OnSIDWrite
+	s.bus.Hooks.OnSIDWrite = func(reg byte, oldValue byte, value byte) {
+		(*count)++
+		if previous != nil {
+			previous(reg, oldValue, value)
+		}
+	}
+	return func() {
+		s.bus.Hooks.OnSIDWrite = previous
+	}
+}
+
+func (s *Stream) runInstalledIRQ(vector irqVectorSnapshot, afterStep func(cycles int)) (int, error) {
+	if vector.Source == "kernal" {
+		return s.cpu.RunKernalIRQHookWithHook(vector.Selected, s.maxPlayCycles, afterStep)
+	}
+	cycles, _, err := s.cpu.RunIRQWithHook(vector.Selected, s.maxPlayCycles, afterStep)
+	return cycles, err
+}
+
+func (s *Stream) renderBasicFrame(audio *audioClock) error {
+	frameCycles := s.cyclesPerFrame
+	usedCycles := 0
+	frameSIDWrites := 0
+	restoreSIDHook := s.countFrameSIDWrites(&frameSIDWrites)
+	defer restoreSIDHook()
+	basicDoneAtStart := s.basic.Done()
+	addCycles := func(cycles int) {
+		usedCycles += cycles
+		audio.addCycles(float64(cycles))
+	}
+	if !s.basic.Done() {
+		if _, err := s.basic.Run(roundedCycles(frameCycles), addCycles); err != nil {
+			if isCPUHalt(err) {
+				s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+				return nil
+			}
+			sample := s.samplePos + int64(audio.pos)
+			err = fmt.Errorf("engine: BASIC play failed near sample %d: %w", sample, err)
+			return newFailureError(FailurePhasePlay, err, failureContext(s.bus, s.cpu, s.tune, s.subtune, sample, s.tune.InitAddress, usedCycles, roundedCycles(frameCycles), s.cyclesPerFrame))
+		}
+	}
+	if s.basic.Done() && basicDoneAtStart {
+		if vector := irqVectors(s.bus); vector.OK {
+			if cycles, err := s.runInstalledIRQ(vector, addCycles); err != nil {
+				if isCPUHalt(err) {
+					s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+					return nil
+				}
+				if frameSIDWrites > 0 && isCycleLimit(err) {
+					s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+					return nil
+				}
+				sample := s.samplePos + int64(audio.pos)
+				err = fmt.Errorf("engine: IRQ play failed near sample %d: %w", sample, err)
+				return newFailureError(FailurePhaseIRQ, err, failureContext(s.bus, s.cpu, s.tune, s.subtune, sample, vector.Selected, cycles, s.maxPlayCycles, s.cyclesPerFrame))
+			}
+		}
+	}
+	if idle := frameCycles - float64(usedCycles); idle > 0 {
+		audio.addCycles(idle)
+		s.bus.AdvanceCycles(roundedCycles(idle))
+	}
 	return nil
 }
 
@@ -294,7 +585,7 @@ func (s *Stream) refreshPlaybackTimer() {
 		return
 	}
 	s.cyclesPerFrame = ciaTimerCycles(s.bus, s.cyclesPerFrame)
-	s.maxPlayCycles = int(s.cyclesPerFrame) * 2
+	s.maxPlayCycles = playCycleBudget(s.tune, s.cyclesPerFrame)
 }
 
 type audioClock struct {
@@ -355,6 +646,8 @@ func initMachine(bus *c64.Bus) {
 	bus.RAM[0x0001] = 0x37
 	bus.RAM[0x0314] = 0x31
 	bus.RAM[0x0315] = 0xea
+	bus.RAM[0x0318] = 0x47
+	bus.RAM[0x0319] = 0xfe
 	bus.RAM[0xfffe] = 0x31
 	bus.RAM[0xffff] = 0xea
 
@@ -381,12 +674,128 @@ func configureTuneEnvironment(bus *c64.Bus, tune *sidfile.Tune) {
 	bus.RAM[0xdc05] = 0x40
 }
 
+func configureBASICEnvironment(bus *c64.Bus, tune *sidfile.Tune, program *basic.Program, subtune int) {
+	bus.RAM[0x0000] = 0x2f
+	bus.RAM[0x0001] = 0x37
+	start := tune.EffectiveLoad
+	end := basicLoadedEnd(tune, program)
+	if end == 0 {
+		end = start
+	}
+	if program != nil && program.End > end {
+		end = program.End
+	}
+	writeLE16(bus, 0x002b, start) // TXTTAB
+	writeLE16(bus, 0x002d, end)   // VARTAB
+	writeLE16(bus, 0x002f, end)   // ARYTAB
+	writeLE16(bus, 0x0031, end)   // STREND
+	writeLE16(bus, 0x0033, 0xa000)
+	writeLE16(bus, 0x0037, 0xa000)
+	installBASICCHRGET(bus, start)
+	bus.RAM[0x030c] = byte(subtune - 1)
+	bus.RAM[0x030d] = 0
+	bus.RAM[0x030e] = 0
+	bus.RAM[0x030f] = 0x24
+}
+
+func basicLoadedEnd(tune *sidfile.Tune, program *basic.Program) uint16 {
+	if tune == nil {
+		if program != nil {
+			return program.End
+		}
+		return 0
+	}
+	end := tune.EffectiveLoad
+	if len(tune.Payload) > 0 {
+		loadedEnd := int(tune.EffectiveLoad) + len(tune.Payload)
+		if loadedEnd > 0xffff {
+			loadedEnd = 0xffff
+		}
+		end = uint16(loadedEnd)
+	}
+	if program != nil && program.End != 0 {
+		if program.End > end {
+			end = program.End
+		}
+	}
+	return end
+}
+
+func installBASICCHRGET(bus *c64.Bus, start uint16) {
+	copy(bus.RAM[0x0073:], []byte{
+		0xe6, 0x7a, // INC TXTPTR low byte / LDA operand low byte.
+		0xd0, 0x02, // BNE CHRGOT.
+		0xe6, 0x7b, // INC TXTPTR high byte / LDA operand high byte.
+		0xad, 0x00, 0x00, // CHRGOT: LDA $0000, operand is TXTPTR at $7a/$7b.
+		0xc9, 0x3a, // CMP #':'.
+		0xb0, 0x0a, // BCS return with non-number token/colon.
+		0xc9, 0x20, // CMP #' '.
+		0xf0, 0xef, // BEQ CHRGET, skipping spaces.
+		0x38,       // SEC.
+		0xe9, 0x30, // SBC #'0'.
+		0x38,       // SEC.
+		0xe9, 0xd0, // SBC #$d0, setting carry for digits like C64 BASIC.
+		0x60, // RTS.
+	})
+	if start > 0 {
+		start--
+	}
+	writeLE16(bus, 0x007a, start)
+}
+
+func writeLE16(bus *c64.Bus, addr uint16, value uint16) {
+	bus.RAM[addr] = byte(value)
+	bus.RAM[addr+1] = byte(value >> 8)
+}
+
 func ciaTimerCycles(bus *c64.Bus, fallback float64) float64 {
 	timer := uint16(bus.RAM[0xdc04]) | uint16(bus.RAM[0xdc05])<<8
 	if timer == 0 {
 		return fallback
 	}
 	return float64(timer) + 1
+}
+
+func isContinuousSystemExit(bus *c64.Bus, addr uint16) bool {
+	if bus != nil && bus.IsLoaded(addr) {
+		return false
+	}
+	switch addr {
+	case 0xa000, // BASIC cold-start entry.
+		0xfce2: // KERNAL reset entry.
+		return true
+	default:
+		return false
+	}
+}
+
+func playCycleBudget(tune *sidfile.Tune, cyclesPerFrame float64) int {
+	budget := int(cyclesPerFrame) * runtimeBudgetFrames
+	if tune != nil {
+		videoFrame := tune.CPUClockHz() / float64(videoRefreshHz(tune))
+		minBudget := int(videoFrame) * runtimeBudgetFrames
+		if budget < minBudget {
+			budget = minBudget
+		}
+	}
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
+func videoRefreshHz(tune *sidfile.Tune) int {
+	if tune != nil && tune.Clock == sidfile.ClockNTSC {
+		return 60
+	}
+	return 50
+}
+
+func roundedCycles(cycles float64) int {
+	if cycles <= 0 {
+		return 0
+	}
+	return int(cycles + 0.5)
 }
 
 func bankRegisterForCall(addr uint16) byte {
@@ -402,16 +811,65 @@ func bankRegisterForCall(addr uint16) byte {
 	}
 }
 
-func interruptVector(bus *c64.Bus) (uint16, bool) {
-	hardware := uint16(bus.RAM[0xfffe]) | uint16(bus.RAM[0xffff])<<8
+func failureContext(bus *c64.Bus, cpu *c64.CPU, tune *sidfile.Tune, subtune int, sample int64, entry uint16, cycles int, maxCycles int, cyclesPerFrame float64) FailureContext {
+	ctx := FailureContext{
+		Subtune:        subtune,
+		Sample:         sample,
+		Entry:          entry,
+		Cycles:         cycles,
+		MaxCycles:      maxCycles,
+		CyclesPerFrame: cyclesPerFrame,
+	}
+	if bus != nil {
+		ctx.BankRegister = bus.RAM[0x0001]
+		info := irqVectors(bus)
+		ctx.IRQHardwareVector = info.Hardware
+		ctx.IRQKernalVector = info.Kernal
+		ctx.IRQSelectedVector = info.Selected
+		ctx.IRQVectorSource = info.Source
+	}
+	if cpu != nil {
+		ctx.PC = cpu.PC
+		if bus != nil {
+			ctx.Opcode = bus.Read(cpu.PC)
+			ctx.Mnemonic = c64.Mnemonic(ctx.Opcode)
+			ctx.MemoryClass = bus.MemoryClass(cpu.PC)
+			ctx.Loaded = bus.IsLoaded(cpu.PC)
+		}
+	}
+	if tune != nil && entry == 0 {
+		ctx.Entry = tune.PlayAddress
+	}
+	return ctx
+}
+
+type irqVectorSnapshot struct {
+	Hardware uint16
+	Kernal   uint16
+	Selected uint16
+	Source   string
+	OK       bool
+}
+
+func irqVectors(bus *c64.Bus) irqVectorSnapshot {
+	hardware := uint16(bus.Read(0xfffe)) | uint16(bus.Read(0xffff))<<8
 	kernal := uint16(bus.RAM[0x0314]) | uint16(bus.RAM[0x0315])<<8
+	nmi := uint16(bus.RAM[0x0318]) | uint16(bus.RAM[0x0319])<<8
 	if hardware != 0 && hardware != 0xea31 {
-		return hardware, true
+		return irqVectorSnapshot{Hardware: hardware, Kernal: kernal, Selected: hardware, Source: "hardware", OK: true}
 	}
 	if kernal != 0 && kernal != 0xea31 {
-		return kernal, true
+		return irqVectorSnapshot{Hardware: hardware, Kernal: kernal, Selected: kernal, Source: "kernal", OK: true}
 	}
-	return 0, false
+	if nmi != 0 && nmi != 0xfe47 {
+		return irqVectorSnapshot{Hardware: hardware, Kernal: kernal, Selected: nmi, Source: "nmi", OK: true}
+	}
+	return irqVectorSnapshot{Hardware: hardware, Kernal: kernal}
+}
+
+func interruptVector(bus *c64.Bus) (uint16, bool) {
+	info := irqVectors(bus)
+	return info.Selected, info.OK
 }
 
 func sidModel(model sidfile.Model) sid.Model {

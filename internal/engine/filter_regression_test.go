@@ -36,6 +36,7 @@ func TestAirwolfTitleFilterDoesNotRingOutOfControl(t *testing.T) {
 func fixturePath(t *testing.T, name string) string {
 	t.Helper()
 	for _, candidate := range []string{
+		filepath.Join("..", "..", "..", "test_tunes", "C64Music", "MUSICIANS", "S", "SoedeSoft", "Soede_Jeroen", name),
 		filepath.Join("..", "..", "..", "test_tunes", name),
 		filepath.Join("..", "test_tunes", name),
 		filepath.Join("test_tunes", name),

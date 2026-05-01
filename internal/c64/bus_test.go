@@ -49,3 +49,25 @@ func TestBusHooksReportSIDWrites(t *testing.T) {
 		t.Fatalf("SID write hook = reg $%02x old $%02x new $%02x, want reg $18 old $00 new $0f", sidReg, oldValue, newValue)
 	}
 }
+
+func TestGeneratedCodeAtC000IsExecutableRAM(t *testing.T) {
+	chip := sid.New(44100, 985248)
+	bus := NewBus(chip)
+	bus.RAM[0x0001] = 0x37
+	copy(bus.RAM[0xc000:], []byte{
+		0xa9, 0x41, // LDA #$41
+		0x8d, 0x00, 0xd4, // STA $D400
+		0x60, // RTS
+	})
+
+	if bus.IsUnloadedROM(0xc000) {
+		t.Fatal("$C000 should be executable RAM, not unloaded ROM")
+	}
+	cpu := NewCPU(bus)
+	if _, err := cpu.RunSubroutine(0xc000, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got := chip.Register(0); got != 0x41 {
+		t.Fatalf("SID register 0 = $%02x, want generated code write", got)
+	}
+}

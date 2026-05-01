@@ -6,10 +6,49 @@ type CycleLimitError struct {
 	Kind      string
 	Address   uint16
 	MaxCycles int
+	Cycles    int
+	PC        uint16
+	Opcode    byte
+	Mnemonic  string
 }
 
 func (e *CycleLimitError) Error() string {
 	return fmt.Sprintf("c64: %s at $%04X exceeded %d cycles", e.Kind, e.Address, e.MaxCycles)
+}
+
+type InstructionError struct {
+	Kind        string
+	PC          uint16
+	Opcode      byte
+	Mnemonic    string
+	Cycles      int
+	MemoryClass string
+	Loaded      bool
+}
+
+type CPUHaltError struct {
+	PC          uint16
+	Opcode      byte
+	Mnemonic    string
+	MemoryClass string
+	Loaded      bool
+}
+
+func (e *CPUHaltError) Error() string {
+	return fmt.Sprintf("c64: CPU halted by KIL opcode $%02X at $%04X", e.Opcode, e.PC)
+}
+
+func (e *InstructionError) Error() string {
+	switch e.Kind {
+	case "brk":
+		return fmt.Sprintf("c64: BRK at $%04X", e.PC)
+	case "unsupported_opcode":
+		return fmt.Sprintf("c64: unsupported opcode $%02X at $%04X", e.Opcode, e.PC)
+	case "rom_entry":
+		return fmt.Sprintf("c64: entered unsupported ROM at $%04X", e.PC)
+	default:
+		return fmt.Sprintf("c64: %s opcode $%02X at $%04X", e.Kind, e.Opcode, e.PC)
+	}
 }
 
 const (
@@ -32,6 +71,8 @@ type CPU struct {
 	SP byte
 	PC uint16
 	P  byte
+
+	Halted bool
 }
 
 type StepInfo struct {
@@ -72,11 +113,140 @@ func (c *CPU) RunSubroutineWithHook(addr uint16, a byte, maxCycles int, afterSte
 	call := c.BeginSubroutine(addr, a)
 
 	total := 0
+	lastPC := c.PC
+	lastOpcode := c.Bus.Read(c.PC)
 	for total < maxCycles {
 		if c.SubroutineReturned(call) {
 			return total, nil
 		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
 		if c.Bus.IsUnloadedROM(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
+		lastPC = c.PC
+		lastOpcode = c.Bus.Read(c.PC)
+		cycles, err := c.Step()
+		if err != nil {
+			c.Bus.FlushSIDWrites()
+			return total, err
+		}
+		total += cycles
+		if afterStep != nil {
+			afterStep(cycles)
+		}
+		c.Bus.FlushSIDWrites()
+		if c.SubroutineReturned(call) {
+			return total, nil
+		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
+	}
+	c.AbortSubroutine(call)
+	return total, &CycleLimitError{Kind: "subroutine", Address: addr, MaxCycles: maxCycles, Cycles: total, PC: lastPC, Opcode: lastOpcode, Mnemonic: Mnemonic(lastOpcode)}
+}
+
+func (c *CPU) RunSubroutineSliceWithHook(call SubroutineCall, maxCycles int, afterStep func(cycles int)) (int, bool, error) {
+	total := 0
+	for total < maxCycles {
+		if c.SubroutineReturned(call) {
+			return total, true, nil
+		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, true, nil
+		}
+		if c.Bus.IsUnloadedROM(c.PC) {
+			c.AbortSubroutine(call)
+			return total, true, nil
+		}
+		cycles, err := c.Step()
+		if err != nil {
+			c.Bus.FlushSIDWrites()
+			return total, false, err
+		}
+		total += cycles
+		if afterStep != nil {
+			afterStep(cycles)
+		}
+		c.Bus.FlushSIDWrites()
+		if c.SubroutineReturned(call) {
+			return total, true, nil
+		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, true, nil
+		}
+	}
+	return total, c.SubroutineReturned(call), nil
+}
+
+func (c *CPU) RunSubroutineWithInfoHook(addr uint16, a byte, maxCycles int, afterStep func(StepInfo)) (int, error) {
+	call := c.BeginSubroutine(addr, a)
+
+	total := 0
+	var lastInfo StepInfo
+	for total < maxCycles {
+		if c.SubroutineReturned(call) {
+			return total, nil
+		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
+		if c.Bus.IsUnloadedROM(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
+		info, err := c.StepWithInfo()
+		if err != nil {
+			c.Bus.FlushSIDWrites()
+			return total, err
+		}
+		lastInfo = info
+		total += info.Cycles
+		if afterStep != nil {
+			afterStep(info)
+		}
+		c.Bus.FlushSIDWrites()
+		if c.SubroutineReturned(call) {
+			return total, nil
+		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
+	}
+	c.AbortSubroutine(call)
+	return total, &CycleLimitError{Kind: "subroutine", Address: addr, MaxCycles: maxCycles, Cycles: total, PC: lastInfo.PC, Opcode: lastInfo.Opcode, Mnemonic: lastInfo.Mnemonic}
+}
+
+func (c *CPU) RunKernalIRQHookWithHook(addr uint16, maxCycles int, afterStep func(cycles int)) (int, error) {
+	call := c.BeginSubroutine(addr, c.A)
+
+	total := 0
+	lastPC := c.PC
+	lastOpcode := c.Bus.Read(c.PC)
+	for total < maxCycles {
+		if c.SubroutineReturned(call) {
+			return total, nil
+		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
+		if c.Bus.IsUnloadedROM(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
+		lastPC = c.PC
+		lastOpcode = c.Bus.Read(c.PC)
+		if lastOpcode == 0x40 {
 			c.AbortSubroutine(call)
 			return total, nil
 		}
@@ -90,20 +260,37 @@ func (c *CPU) RunSubroutineWithHook(addr uint16, a byte, maxCycles int, afterSte
 			afterStep(cycles)
 		}
 		c.Bus.FlushSIDWrites()
+		if c.SubroutineReturned(call) {
+			return total, nil
+		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
 	}
 	c.AbortSubroutine(call)
-	return total, &CycleLimitError{Kind: "subroutine", Address: addr, MaxCycles: maxCycles}
+	return total, &CycleLimitError{Kind: "KERNAL IRQ hook", Address: addr, MaxCycles: maxCycles, Cycles: total, PC: lastPC, Opcode: lastOpcode, Mnemonic: Mnemonic(lastOpcode)}
 }
 
-func (c *CPU) RunSubroutineWithInfoHook(addr uint16, a byte, maxCycles int, afterStep func(StepInfo)) (int, error) {
-	call := c.BeginSubroutine(addr, a)
+func (c *CPU) RunKernalIRQHookWithInfoHook(addr uint16, maxCycles int, afterStep func(StepInfo)) (int, error) {
+	call := c.BeginSubroutine(addr, c.A)
 
 	total := 0
+	var lastInfo StepInfo
 	for total < maxCycles {
 		if c.SubroutineReturned(call) {
 			return total, nil
 		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
 		if c.Bus.IsUnloadedROM(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
+		op := c.Bus.Read(c.PC)
+		if op == 0x40 {
 			c.AbortSubroutine(call)
 			return total, nil
 		}
@@ -112,14 +299,22 @@ func (c *CPU) RunSubroutineWithInfoHook(addr uint16, a byte, maxCycles int, afte
 			c.Bus.FlushSIDWrites()
 			return total, err
 		}
+		lastInfo = info
 		total += info.Cycles
 		if afterStep != nil {
 			afterStep(info)
 		}
 		c.Bus.FlushSIDWrites()
+		if c.SubroutineReturned(call) {
+			return total, nil
+		}
+		if IsKernalIRQTailAddress(c.PC) && !c.Bus.IsLoaded(c.PC) {
+			c.AbortSubroutine(call)
+			return total, nil
+		}
 	}
 	c.AbortSubroutine(call)
-	return total, &CycleLimitError{Kind: "subroutine", Address: addr, MaxCycles: maxCycles}
+	return total, &CycleLimitError{Kind: "KERNAL IRQ hook", Address: addr, MaxCycles: maxCycles, Cycles: total, PC: lastInfo.PC, Opcode: lastInfo.Opcode, Mnemonic: lastInfo.Mnemonic}
 }
 
 func (c *CPU) BeginSubroutine(addr uint16, a byte) SubroutineCall {
@@ -147,12 +342,18 @@ func (c *CPU) RunIRQWithHook(vector uint16, maxCycles int, afterStep func(cycles
 	call := c.BeginIRQ(vector)
 
 	total := 0
+	lastPC := c.PC
+	lastOpcode := c.Bus.Read(c.PC)
 	for total < maxCycles {
 		if c.Bus.IsUnloadedROM(c.PC) {
+			pc := c.PC
+			op := c.Bus.Read(pc)
 			c.AbortIRQ(call)
-			return total, IRQEnteredROM, nil
+			return total, IRQEnteredROM, c.instructionError("rom_entry", pc, op, 0)
 		}
-		op := c.Bus.Read(c.PC)
+		lastPC = c.PC
+		lastOpcode = c.Bus.Read(c.PC)
+		op := lastOpcode
 		cycles, err := c.Step()
 		if err != nil {
 			c.Bus.FlushSIDWrites()
@@ -167,23 +368,28 @@ func (c *CPU) RunIRQWithHook(vector uint16, maxCycles int, afterStep func(cycles
 			return total, IRQReturned, nil
 		}
 	}
-	return total, IRQReturned, &CycleLimitError{Kind: "IRQ", Address: vector, MaxCycles: maxCycles}
+	c.AbortIRQ(call)
+	return total, IRQReturned, &CycleLimitError{Kind: "IRQ", Address: vector, MaxCycles: maxCycles, Cycles: total, PC: lastPC, Opcode: lastOpcode, Mnemonic: Mnemonic(lastOpcode)}
 }
 
 func (c *CPU) RunIRQWithInfoHook(vector uint16, maxCycles int, afterStep func(StepInfo)) (int, irqResult, error) {
 	call := c.BeginIRQ(vector)
 
 	total := 0
+	var lastInfo StepInfo
 	for total < maxCycles {
 		if c.Bus.IsUnloadedROM(c.PC) {
+			pc := c.PC
+			op := c.Bus.Read(pc)
 			c.AbortIRQ(call)
-			return total, IRQEnteredROM, nil
+			return total, IRQEnteredROM, c.instructionError("rom_entry", pc, op, 0)
 		}
 		info, err := c.StepWithInfo()
 		if err != nil {
 			c.Bus.FlushSIDWrites()
 			return total, IRQReturned, err
 		}
+		lastInfo = info
 		total += info.Cycles
 		if afterStep != nil {
 			afterStep(info)
@@ -193,7 +399,8 @@ func (c *CPU) RunIRQWithInfoHook(vector uint16, maxCycles int, afterStep func(St
 			return total, IRQReturned, nil
 		}
 	}
-	return total, IRQReturned, &CycleLimitError{Kind: "IRQ", Address: vector, MaxCycles: maxCycles}
+	c.AbortIRQ(call)
+	return total, IRQReturned, &CycleLimitError{Kind: "IRQ", Address: vector, MaxCycles: maxCycles, Cycles: total, PC: lastInfo.PC, Opcode: lastInfo.Opcode, Mnemonic: lastInfo.Mnemonic}
 }
 
 func (c *CPU) BeginIRQ(vector uint16) IRQCall {
@@ -336,18 +543,47 @@ func Mnemonic(op byte) string {
 		return "PLP"
 	case 0xea, 0x1a, 0x3a, 0x5a, 0x7a, 0xda, 0xfa, 0x80, 0x82, 0x89, 0xc2, 0xe2, 0x04, 0x44, 0x64, 0x14, 0x34, 0x54, 0x74, 0xd4, 0xf4, 0x0c, 0x1c, 0x3c, 0x5c, 0x7c, 0xdc, 0xfc:
 		return "NOP"
+	case 0x02, 0x12, 0x22, 0x32, 0x42, 0x52, 0x62, 0x72, 0x92, 0xb2, 0xd2, 0xf2:
+		return "KIL"
 	default:
 		return "OP"
 	}
 }
 
 func (c *CPU) Step() (int, error) {
+	cycles, err := c.step()
+	if err == nil && c.Bus != nil {
+		c.Bus.AdvanceCycles(cycles)
+	}
+	return cycles, err
+}
+
+func (c *CPU) step() (int, error) {
+	if c.Halted {
+		opcode := byte(0)
+		if c.Bus != nil {
+			opcode = c.Bus.Read(c.PC)
+		}
+		return 0, c.haltError(c.PC, opcode)
+	}
 	pc := c.PC
 	op := c.fetch()
 
 	switch op {
+	case 0x02, 0x12, 0x22, 0x32, 0x42, 0x52, 0x62, 0x72, 0x92, 0xb2, 0xd2, 0xf2:
+		c.PC = pc
+		c.Halted = true
+		return 0, c.haltError(pc, op)
 	case 0x00: // BRK
-		return 7, fmt.Errorf("c64: BRK at $%04X", pc)
+		c.PC++
+		c.push(byte(c.PC >> 8))
+		c.push(byte(c.PC))
+		c.push(c.P | flagB | flagU)
+		c.setFlag(flagI, true)
+		lo := uint16(c.read(0xfffe))
+		hi := uint16(c.read(0xffff))
+		c.PC = hi<<8 | lo
+		return 7, nil
 	case 0xea: // NOP
 		return 2, nil
 	case 0x1a, 0x3a, 0x5a, 0x7a, 0xda, 0xfa: // undocumented one-byte NOPs
@@ -947,7 +1183,35 @@ func (c *CPU) Step() (int, error) {
 		return 4, nil
 	}
 
-	return 0, fmt.Errorf("c64: unsupported opcode $%02X at $%04X", op, pc)
+	return 0, c.instructionError("unsupported_opcode", pc, op, 0)
+}
+
+func (c *CPU) haltError(pc uint16, opcode byte) *CPUHaltError {
+	err := &CPUHaltError{
+		PC:       pc,
+		Opcode:   opcode,
+		Mnemonic: Mnemonic(opcode),
+	}
+	if c.Bus != nil {
+		err.MemoryClass = c.Bus.MemoryClass(pc)
+		err.Loaded = c.Bus.IsLoaded(pc)
+	}
+	return err
+}
+
+func (c *CPU) instructionError(kind string, pc uint16, opcode byte, cycles int) *InstructionError {
+	err := &InstructionError{
+		Kind:     kind,
+		PC:       pc,
+		Opcode:   opcode,
+		Mnemonic: Mnemonic(opcode),
+		Cycles:   cycles,
+	}
+	if c.Bus != nil {
+		err.MemoryClass = c.Bus.MemoryClass(pc)
+		err.Loaded = c.Bus.IsLoaded(pc)
+	}
+	return err
 }
 
 type cpuSnapshot struct {
@@ -957,6 +1221,8 @@ type cpuSnapshot struct {
 	SP byte
 	PC uint16
 	P  byte
+
+	Halted bool
 }
 
 func (c *CPU) snapshot() cpuSnapshot {
@@ -967,6 +1233,8 @@ func (c *CPU) snapshot() cpuSnapshot {
 		SP: c.SP,
 		PC: c.PC,
 		P:  c.P,
+
+		Halted: c.Halted,
 	}
 }
 
@@ -977,6 +1245,7 @@ func (c *CPU) restore(s cpuSnapshot) {
 	c.SP = s.SP
 	c.PC = s.PC
 	c.P = s.P
+	c.Halted = s.Halted
 }
 
 func (c *CPU) fetch() byte {

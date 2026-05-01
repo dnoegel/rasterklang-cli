@@ -67,6 +67,8 @@ Play options:
         skip this far into the rendered tune before playback
   -rate int
         sample rate (default 44100)
+  -profile string
+        sound profile name or JSON path (default: balanced)
   -volume float
         playback volume multiplier (default 1)
   -fade-in duration
@@ -89,6 +91,8 @@ Render options:
         render duration, for example 30s or 2m (default 30s)
   -rate int
         sample rate (default 44100)
+  -profile string
+        sound profile name or JSON path (default: balanced)
 
 Analyze options:
   -subtune int
@@ -97,6 +101,8 @@ Analyze options:
         render duration for SID input (default 30s)
   -rate int
         sample rate for SID input (default 44100)
+  -profile string
+        sound profile name or JSON path for SID input (default: balanced)
 
 Duration options:
   -subtune int
@@ -146,6 +152,7 @@ func info(args []string) error {
 	}
 
 	fmt.Printf("Format:       %s v%d\n", tune.Format, tune.Version)
+	fmt.Printf("Types:        %s\n", tuneTypes(tune))
 	fmt.Printf("Title:        %s\n", tune.Title)
 	fmt.Printf("Author:       %s\n", tune.Author)
 	fmt.Printf("Released:     %s\n", tune.Released)
@@ -165,12 +172,25 @@ func info(args []string) error {
 	return nil
 }
 
+func tuneTypes(tune *sid.Tune) string {
+	types := tune.Types()
+	if len(types) == 0 {
+		return "unknown"
+	}
+	labels := make([]string, len(types))
+	for idx, typ := range types {
+		labels[idx] = typ.String()
+	}
+	return strings.Join(labels, ", ")
+}
+
 func play(args []string) error {
 	fs := flag.NewFlagSet("play", flag.ContinueOnError)
 	subtune := fs.Int("subtune", 0, "1-based subtune number")
 	duration := fs.Duration("duration", 3*time.Minute, "playback duration")
 	start := fs.Duration("start", 0, "skip this far into the tune before playback")
 	rate := fs.Int("rate", 44100, "sample rate")
+	profilePath := fs.String("profile", "", "sound profile name or JSON path")
 	volume := fs.Float64("volume", 1, "playback volume multiplier")
 	loop := fs.Bool("loop", false, "repeat until interrupted")
 	fadeIn := fs.Duration("fade-in", 5*time.Millisecond, "fade in at the start of each play span")
@@ -209,6 +229,10 @@ func play(args []string) error {
 	}
 	if *buffer < 0 {
 		return fmt.Errorf("buffer must not be negative")
+	}
+	soundProfile, err := loadSoundProfile(*profilePath)
+	if err != nil {
+		return err
 	}
 
 	input := fs.Arg(0)
@@ -283,8 +307,9 @@ func play(args []string) error {
 
 	factory := func() (playback.SampleSource, error) {
 		stream, err := sid.NewStream(tune, sid.StreamOptions{
-			Subtune:    *subtune,
-			SampleRate: *rate,
+			Subtune:      *subtune,
+			SampleRate:   *rate,
+			SoundProfile: soundProfile,
 		})
 		if err != nil {
 			return nil, err
@@ -317,12 +342,27 @@ func samplesForDuration(duration time.Duration, sampleRate int) int {
 	return int(duration.Seconds() * float64(sampleRate))
 }
 
+func loadSoundProfile(value string) (*sid.SoundProfile, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	if profile, err := sid.BuiltinSoundProfile(value); err == nil {
+		return &profile, nil
+	}
+	profile, err := sid.LoadSoundProfile(value)
+	if err != nil {
+		return nil, fmt.Errorf("load sound profile %q: %w", value, err)
+	}
+	return &profile, nil
+}
+
 func render(args []string) error {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	out := fs.String("o", "", "output WAV path")
 	subtune := fs.Int("subtune", 0, "1-based subtune number")
 	duration := fs.Duration("duration", 30*time.Second, "render duration")
 	rate := fs.Int("rate", 44100, "sample rate")
+	profilePath := fs.String("profile", "", "sound profile name or JSON path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -334,6 +374,10 @@ func render(args []string) error {
 	}
 	if *rate < 8000 || *rate > 192000 {
 		return fmt.Errorf("sample rate must be between 8000 and 192000")
+	}
+	soundProfile, err := loadSoundProfile(*profilePath)
+	if err != nil {
+		return err
 	}
 
 	input := fs.Arg(0)
@@ -352,9 +396,10 @@ func render(args []string) error {
 	}
 
 	pcm, err := sid.Render(tune, sid.RenderOptions{
-		Subtune:    *subtune,
-		Duration:   *duration,
-		SampleRate: *rate,
+		Subtune:      *subtune,
+		Duration:     *duration,
+		SampleRate:   *rate,
+		SoundProfile: soundProfile,
 	})
 	if err != nil {
 		return err
@@ -479,6 +524,7 @@ func analyze(args []string) error {
 	subtune := fs.Int("subtune", 0, "1-based subtune number")
 	duration := fs.Duration("duration", 30*time.Second, "render duration for SID input")
 	rate := fs.Int("rate", 44100, "sample rate for SID input")
+	profilePath := fs.String("profile", "", "sound profile name or JSON path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -490,6 +536,10 @@ func analyze(args []string) error {
 	}
 	if *rate < 8000 || *rate > 192000 {
 		return fmt.Errorf("sample rate must be between 8000 and 192000")
+	}
+	soundProfile, err := loadSoundProfile(*profilePath)
+	if err != nil {
+		return err
 	}
 
 	input := fs.Arg(0)
@@ -514,9 +564,10 @@ func analyze(args []string) error {
 			return fmt.Errorf("subtune %d is outside 1..%d", *subtune, tune.Songs)
 		}
 		pcm, err := sid.Render(tune, sid.RenderOptions{
-			Subtune:    *subtune,
-			Duration:   *duration,
-			SampleRate: *rate,
+			Subtune:      *subtune,
+			Duration:     *duration,
+			SampleRate:   *rate,
+			SoundProfile: soundProfile,
 		})
 		if err != nil {
 			return err

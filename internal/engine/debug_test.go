@@ -62,6 +62,41 @@ func TestDebugStreamSnapshot(t *testing.T) {
 	}
 }
 
+func TestDebugStreamEmitsBASICStatementTrace(t *testing.T) {
+	tune, err := sidfile.Parse(syntheticBasicRSID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := NewDebugStream(tune, DebugOptions{
+		TraceMask:      TraceBASIC | TraceSIDWrites,
+		MaxTraceEvents: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.StepFrame(); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _ := stream.ReadTrace(64, 0)
+	var statement TraceEvent
+	for _, event := range events {
+		if event.Kind == "basic.statement" {
+			statement = event
+			break
+		}
+	}
+	if statement.Kind == "" {
+		t.Fatalf("missing basic.statement in %#v", events)
+	}
+	if statement.BasicLine != 10 || statement.BasicName != "POKE" {
+		t.Fatalf("statement trace = %#v, want line 10 POKE", statement)
+	}
+	if statement.Cycles <= 0 || statement.BasicText == "" {
+		t.Fatalf("statement trace missing cycles/text: %#v", statement)
+	}
+}
+
 func TestTraceRingDropsOldEvents(t *testing.T) {
 	ring := newTraceRing(3)
 	for i := 0; i < 5; i++ {

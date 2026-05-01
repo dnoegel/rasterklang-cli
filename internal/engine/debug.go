@@ -4,14 +4,17 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/dnoegel/zmk-sid/internal/basic"
 	"github.com/dnoegel/zmk-sid/internal/c64"
 	sidchip "github.com/dnoegel/zmk-sid/internal/sid"
 	"github.com/dnoegel/zmk-sid/internal/sidfile"
+	sidprofile "github.com/dnoegel/zmk-sid/profile"
 )
 
 type DebugOptions struct {
 	Subtune        int
 	SampleRate     int
+	SoundProfile   *sidprofile.Profile
 	TraceMask      TraceMask
 	MaxTraceEvents int
 }
@@ -25,6 +28,7 @@ const (
 	TraceSIDWrites
 	TraceSIDReads
 	TraceAudio
+	TraceBASIC
 )
 
 type DebugStream struct {
@@ -40,6 +44,7 @@ type DebugStream struct {
 	stepCall        c64.SubroutineCall
 	stepIRQCall     c64.IRQCall
 	stepIRQ         bool
+	stepKernalIRQ   bool
 	stepAddress     uint16
 	stepCycles      int
 	stepFrameCycles float64
@@ -60,6 +65,13 @@ type TraceEvent struct {
 	Value    byte   `json:"value,omitempty"`
 	OldValue byte   `json:"oldValue,omitempty"`
 	Phase    string `json:"phase,omitempty"`
+
+	BasicLine int    `json:"basicLine,omitempty"`
+	BasicPos  int    `json:"basicPos,omitempty"`
+	BasicEnd  int    `json:"basicEnd,omitempty"`
+	BasicOp   byte   `json:"basicOp,omitempty"`
+	BasicName string `json:"basicName,omitempty"`
+	BasicText string `json:"basicText,omitempty"`
 }
 
 type TraceReadInfo struct {
@@ -88,8 +100,10 @@ type CPUSnapshot struct {
 }
 
 type BusSnapshot struct {
-	BankRegister byte   `json:"bankRegister"`
-	IRQVector    uint16 `json:"irqVector"`
+	BankRegister  byte   `json:"bankRegister"`
+	IRQVector     uint16 `json:"irqVector"`
+	PCMemoryClass string `json:"pcMemoryClass,omitempty"`
+	PCLoaded      bool   `json:"pcLoaded,omitempty"`
 }
 
 type SIDSnapshot struct {
@@ -124,8 +138,9 @@ type FilterSnapshot struct {
 
 func NewDebugStream(tune *sidfile.Tune, opts DebugOptions) (*DebugStream, error) {
 	state, err := newMachineState(tune, machineOptions{
-		Subtune:    opts.Subtune,
-		SampleRate: opts.SampleRate,
+		Subtune:      opts.Subtune,
+		SampleRate:   opts.SampleRate,
+		SoundProfile: opts.SoundProfile,
 	})
 	if err != nil {
 		return nil, err
@@ -228,6 +243,24 @@ func (s *DebugStream) StepInstruction(maxCycles int) (TraceEvent, error) {
 		s.finishInstructionFrame(nil)
 		return TraceEvent{}, nil
 	}
+	if s.stepKernalIRQ {
+		pc := s.state.cpu.PC
+		op := s.state.bus.Read(pc)
+		if op == 0x40 || c64.IsKernalIRQTailAddress(pc) && !s.state.bus.IsLoaded(pc) {
+			event := TraceEvent{
+				Kind:     "cpu.step",
+				Frame:    s.frame,
+				Cycle:    s.cycle,
+				Sample:   s.state.samplePos,
+				PC:       pc,
+				Opcode:   op,
+				Mnemonic: c64.Mnemonic(op),
+				Phase:    s.phase,
+			}
+			s.finishInstructionFrame(nil)
+			return event, nil
+		}
+	}
 
 	audio := newAudioClock(s.state.chip, make([]int16, s.frameSampleCapacity()), s.state.cyclesPerSample, s.state.cycleAcc, s.state.subSum, s.state.subCount, nil)
 	s.installAudioHook(audio)
@@ -281,8 +314,10 @@ func (s *DebugStream) Snapshot() DebugSnapshot {
 			P:  st.cpu.P,
 		},
 		Bus: BusSnapshot{
-			BankRegister: st.bus.RAM[0x0001],
-			IRQVector:    vector,
+			BankRegister:  st.bus.RAM[0x0001],
+			IRQVector:     vector,
+			PCMemoryClass: st.bus.MemoryClass(st.cpu.PC),
+			PCLoaded:      st.bus.IsLoaded(st.cpu.PC),
 		},
 		SID: convertSIDSnapshot(st.chip.Snapshot()),
 	}
@@ -290,8 +325,21 @@ func (s *DebugStream) Snapshot() DebugSnapshot {
 
 func (s *DebugStream) renderFrame(audio *audioClock) error {
 	st := s.state
+	if st.continuous {
+		return s.renderContinuousFrame(audio)
+	}
+	if st.idlePlayback {
+		return s.renderIdlePlaybackFrame(audio)
+	}
+	if st.basic != nil {
+		return s.renderBasicFrame(audio)
+	}
+
 	frameCycles := st.cyclesPerFrame
 	usedCycles := 0
+	frameSIDWrites := 0
+	restoreSIDHook := s.countFrameSIDWrites(&frameSIDWrites)
+	defer restoreSIDHook()
 	s.phase = "play"
 	s.emitFrame("frame.start")
 	afterStep := func(info c64.StepInfo) {
@@ -308,23 +356,179 @@ func (s *DebugStream) renderFrame(audio *audioClock) error {
 	if st.tune.PlayAddress != 0 {
 		st.bus.RAM[0x0001] = bankRegisterForCall(st.tune.PlayAddress)
 		if _, err := st.cpu.RunSubroutineWithInfoHook(st.tune.PlayAddress, st.cpu.A, st.maxPlayCycles, afterStep); err != nil {
+			if isCPUHalt(err) {
+				s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+				return nil
+			}
+			if frameSIDWrites > 0 && isCycleLimit(err) {
+				s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+				return nil
+			}
 			return fmt.Errorf("engine: play failed near sample %d: %w", st.samplePos+int64(audio.pos), err)
 		}
 	} else {
-		vector, ok := interruptVector(st.bus)
-		if !ok {
+		vector := irqVectors(st.bus)
+		if !vector.OK {
 			return fmt.Errorf("engine: no IRQ vector installed by init routine")
 		}
-		if _, _, err := st.cpu.RunIRQWithInfoHook(vector, st.maxPlayCycles, afterStep); err != nil {
+		if _, err := s.runInstalledIRQ(vector, afterStep); err != nil {
+			if isCPUHalt(err) {
+				s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+				return nil
+			}
+			if frameSIDWrites > 0 && isCycleLimit(err) {
+				s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+				return nil
+			}
 			return fmt.Errorf("engine: IRQ play failed near sample %d: %w", st.samplePos+int64(audio.pos), err)
 		}
 	}
 	if idle := frameCycles - float64(usedCycles); idle > 0 {
 		s.phase = "idle"
 		audio.addCycles(idle)
+		st.bus.AdvanceCycles(roundedCycles(idle))
 		s.cycle += int64(math.Round(idle))
 	}
 	s.refreshPlaybackTimer()
+	s.phase = "play"
+	s.emitFrame("frame.end")
+	s.frame++
+	return nil
+}
+
+func (s *DebugStream) renderIdlePlaybackFrame(audio *audioClock) error {
+	st := s.state
+	s.phase = "idle_playback"
+	s.emitFrame("frame.start")
+	audio.addCycles(st.cyclesPerFrame)
+	st.bus.AdvanceCycles(roundedCycles(st.cyclesPerFrame))
+	s.cycle += int64(math.Round(st.cyclesPerFrame))
+	s.refreshPlaybackTimer()
+	s.emitFrame("frame.end")
+	s.frame++
+	return nil
+}
+
+func (s *DebugStream) renderContinuousFrame(audio *audioClock) error {
+	st := s.state
+	frameCycles := st.cyclesPerFrame
+	usedCycles := 0
+	s.phase = "continuous"
+	s.emitFrame("frame.start")
+	st.bus.DelaySIDWrites = true
+	defer func() {
+		st.bus.FlushSIDWrites()
+		st.bus.DelaySIDWrites = false
+	}()
+	maxCycles := roundedCycles(frameCycles)
+	for usedCycles < maxCycles {
+		if isContinuousSystemExit(st.bus, st.cpu.PC) {
+			s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+			return nil
+		}
+		if st.bus.IsUnloadedROM(st.cpu.PC) {
+			return fmt.Errorf("engine: continuous play failed near sample %d: c64: entered unsupported ROM at $%04X", st.samplePos+int64(audio.pos), st.cpu.PC)
+		}
+		info, err := st.cpu.StepWithInfo()
+		if err != nil {
+			st.bus.FlushSIDWrites()
+			if isCPUHalt(err) {
+				s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+				return nil
+			}
+			return fmt.Errorf("engine: continuous play failed near sample %d: %w", st.samplePos+int64(audio.pos), err)
+		}
+		usedCycles += info.Cycles
+		audio.addCycles(float64(info.Cycles))
+		s.cycle += int64(info.Cycles)
+		s.emitCPUStep(info)
+		st.bus.FlushSIDWrites()
+	}
+	if idle := frameCycles - float64(usedCycles); idle > 0 {
+		s.phase = "idle"
+		audio.addCycles(idle)
+		st.bus.AdvanceCycles(roundedCycles(idle))
+		s.cycle += int64(math.Round(idle))
+	}
+	s.phase = "continuous"
+	s.emitFrame("frame.end")
+	s.frame++
+	return nil
+}
+
+func (s *DebugStream) enterHaltedPlayback(audio *audioClock, frameCycles float64, usedCycles int) {
+	st := s.state
+	st.continuous = false
+	st.idlePlayback = true
+	s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+}
+
+func (s *DebugStream) acceptOverrunFrame(audio *audioClock, frameCycles float64, usedCycles int) {
+	st := s.state
+	if idle := frameCycles - float64(usedCycles); idle > 0 {
+		s.phase = "idle_playback"
+		audio.addCycles(idle)
+		st.bus.AdvanceCycles(roundedCycles(idle))
+		s.cycle += int64(math.Round(idle))
+	}
+	s.refreshPlaybackTimer()
+	s.phase = "play"
+	s.emitFrame("frame.end")
+	s.frame++
+}
+
+func (s *DebugStream) renderBasicFrame(audio *audioClock) error {
+	st := s.state
+	frameCycles := st.cyclesPerFrame
+	usedCycles := 0
+	frameSIDWrites := 0
+	restoreSIDHook := s.countFrameSIDWrites(&frameSIDWrites)
+	defer restoreSIDHook()
+	s.phase = "basic"
+	s.emitFrame("frame.start")
+	basicDoneAtStart := st.basic.Done()
+	addCycles := func(cycles int) {
+		usedCycles += cycles
+		audio.addCycles(float64(cycles))
+		s.cycle += int64(cycles)
+	}
+	if !st.basic.Done() {
+		if _, err := st.basic.Run(roundedCycles(frameCycles), addCycles); err != nil {
+			if isCPUHalt(err) {
+				s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+				return nil
+			}
+			if frameSIDWrites > 0 && isCycleLimit(err) {
+				s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+				return nil
+			}
+			return fmt.Errorf("engine: BASIC play failed near sample %d: %w", st.samplePos+int64(audio.pos), err)
+		}
+	}
+	if st.basic.Done() && basicDoneAtStart {
+		if vector := irqVectors(st.bus); vector.OK {
+			if _, err := s.runInstalledIRQ(vector, func(info c64.StepInfo) {
+				addCycles(info.Cycles)
+				s.emitCPUStep(info)
+			}); err != nil {
+				if isCPUHalt(err) {
+					s.enterHaltedPlayback(audio, frameCycles, usedCycles)
+					return nil
+				}
+				if frameSIDWrites > 0 && isCycleLimit(err) {
+					s.acceptOverrunFrame(audio, frameCycles, usedCycles)
+					return nil
+				}
+				return fmt.Errorf("engine: IRQ play failed near sample %d: %w", st.samplePos+int64(audio.pos), err)
+			}
+		}
+	}
+	if idle := frameCycles - float64(usedCycles); idle > 0 {
+		s.phase = "idle"
+		audio.addCycles(idle)
+		st.bus.AdvanceCycles(roundedCycles(idle))
+		s.cycle += int64(math.Round(idle))
+	}
 	s.phase = "play"
 	s.emitFrame("frame.end")
 	s.frame++
@@ -338,19 +542,25 @@ func (s *DebugStream) beginInstructionFrame() error {
 	s.stepCycles = 0
 	st.bus.DelaySIDWrites = true
 	s.stepIRQ = false
+	s.stepKernalIRQ = false
 	if st.tune.PlayAddress != 0 {
 		s.stepAddress = st.tune.PlayAddress
 		st.bus.RAM[0x0001] = bankRegisterForCall(st.tune.PlayAddress)
 		s.stepCall = st.cpu.BeginSubroutine(st.tune.PlayAddress, st.cpu.A)
 	} else {
-		vector, ok := interruptVector(st.bus)
-		if !ok {
+		vector := irqVectors(st.bus)
+		if !vector.OK {
 			st.bus.DelaySIDWrites = false
 			return fmt.Errorf("engine: no IRQ vector installed by init routine")
 		}
-		s.stepAddress = vector
-		s.stepIRQ = true
-		s.stepIRQCall = st.cpu.BeginIRQ(vector)
+		s.stepAddress = vector.Selected
+		if vector.Source == "kernal" {
+			s.stepKernalIRQ = true
+			s.stepCall = st.cpu.BeginSubroutine(vector.Selected, st.cpu.A)
+		} else {
+			s.stepIRQ = true
+			s.stepIRQCall = st.cpu.BeginIRQ(vector.Selected)
+		}
 	}
 	s.stepActive = true
 	s.emitFrame("frame.start")
@@ -366,6 +576,7 @@ func (s *DebugStream) finishInstructionFrame(audio *audioClock) {
 	if idle := s.stepFrameCycles - float64(s.stepCycles); idle > 0 {
 		s.phase = "idle"
 		audio.addCycles(idle)
+		st.bus.AdvanceCycles(roundedCycles(idle))
 		s.cycle += int64(math.Round(idle))
 	}
 	st.bus.FlushSIDWrites()
@@ -391,7 +602,31 @@ func (s *DebugStream) instructionFrameReturned(info c64.StepInfo) bool {
 	if s.stepIRQ {
 		return info.Opcode == 0x40
 	}
+	if s.stepKernalIRQ {
+		return info.Opcode == 0x40 || s.state.cpu.SubroutineReturned(s.stepCall)
+	}
 	return s.state.cpu.SubroutineReturned(s.stepCall)
+}
+
+func (s *DebugStream) runInstalledIRQ(vector irqVectorSnapshot, afterStep func(c64.StepInfo)) (int, error) {
+	if vector.Source == "kernal" {
+		return s.state.cpu.RunKernalIRQHookWithInfoHook(vector.Selected, s.state.maxPlayCycles, afterStep)
+	}
+	cycles, _, err := s.state.cpu.RunIRQWithInfoHook(vector.Selected, s.state.maxPlayCycles, afterStep)
+	return cycles, err
+}
+
+func (s *DebugStream) countFrameSIDWrites(count *int) func() {
+	previous := s.state.bus.Hooks.OnSIDWrite
+	s.state.bus.Hooks.OnSIDWrite = func(reg byte, oldValue byte, value byte) {
+		(*count)++
+		if previous != nil {
+			previous(reg, oldValue, value)
+		}
+	}
+	return func() {
+		s.state.bus.Hooks.OnSIDWrite = previous
+	}
 }
 
 func (s *DebugStream) refreshPlaybackTimer() {
@@ -400,10 +635,24 @@ func (s *DebugStream) refreshPlaybackTimer() {
 		return
 	}
 	st.cyclesPerFrame = ciaTimerCycles(st.bus, st.cyclesPerFrame)
-	st.maxPlayCycles = int(st.cyclesPerFrame) * 2
+	st.maxPlayCycles = playCycleBudget(st.tune, st.cyclesPerFrame)
 }
 
 func (s *DebugStream) installHooks() {
+	if s.mask&TraceBASIC != 0 && s.state.basic != nil {
+		s.state.basic.SetTraceHook(func(stmt basic.StatementTrace) {
+			s.emit(TraceBASIC, TraceEvent{
+				Kind:      "basic.statement",
+				Cycles:    stmt.Cycles,
+				BasicLine: stmt.Line,
+				BasicPos:  stmt.Pos,
+				BasicEnd:  stmt.End,
+				BasicOp:   stmt.Op,
+				BasicName: stmt.OpName,
+				BasicText: stmt.Text,
+			})
+		})
+	}
 	if s.mask&TraceBusWrites != 0 {
 		s.state.bus.Hooks.OnBusWrite = func(addr uint16, value byte) {
 			s.emit(TraceBusWrites, TraceEvent{

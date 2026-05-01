@@ -5,7 +5,11 @@ Pure-Go SID engine and CLI for PSID/RSID tunes.
 This is a from-scratch implementation, not a libsidplayfp wrapper. The project
 currently provides:
 
-- PSID/RSID metadata parsing
+- PSID/RSID metadata parsing, including filterable tune type labels such as
+  `RSID`, `BASIC`, `Magic Voice`, `SAM/Reciter`, `Electronic Speech Systems`,
+  and `Sound Master`
+- HVSC compatibility scanning with type filters such as
+  `-exclude-type "Electronic Speech Systems"`
 - a MOS 6502/6510 CPU core with many common undocumented opcodes
 - a 64K C64 memory bus with SID register mapping
 - direct `play` address and minimal IRQ-driven tune playback
@@ -69,7 +73,8 @@ archives and publishes them to the matching GitHub Release.
 
 ### `info`
 
-Prints SID metadata and the engine's current support verdict:
+Prints SID metadata, filterable tune type labels, and the engine's current
+support verdict:
 
 ```sh
 zmk-sid info Commando.sid
@@ -90,6 +95,7 @@ Useful flags:
 -duration 3m    # selected playback span; use 0 to play until interrupted
 -start 30s      # skip into the tune before playback
 -rate 48000     # output sample rate
+-profile path   # sound profile name or JSON path; defaults to balanced
 -volume 0.8     # playback gain multiplier
 -fade-in 5ms    # smooth the start of each play span
 -fade-out 25ms  # smooth the end of each finite play span
@@ -117,6 +123,7 @@ Writes mono 16-bit WAV:
 
 ```sh
 zmk-sid render -subtune 1 -duration 2m -rate 44100 -o tune.wav Commando.sid
+zmk-sid render -profile profile-candidate.json -duration 30s -o candidate.wav Commando.sid
 ```
 
 ### `analyze`
@@ -198,6 +205,35 @@ if err != nil {
 
 return sid.WriteWAV("preview.wav", 44100, pcm)
 ```
+
+### Sound Profiles
+
+The default sound is the built-in `balanced` profile. For 6581 playback this is
+currently the promoted `zmk-optimize` filter-focused profile from the no-prune
+global optimizer run. Tools such as `zmk-optimize` can still emit JSON profile
+candidates, and callers can pass those profiles into the renderer without
+changing Go constants:
+
+```go
+soundProfile, err := sid.LoadSoundProfile("profile-candidate.json")
+if err != nil {
+	return err
+}
+
+pcm, err := sid.Render(tune, sid.RenderOptions{
+	Duration:     30 * time.Second,
+	SampleRate:   44100,
+	SoundProfile: &soundProfile,
+})
+```
+
+Profiles can currently override mixer, waveform color, filter, cutoff, and
+output-stage parameters. `filter.cutoff.points` can optionally provide a
+piecewise cutoff-Hz curve; when present it overrides the polynomial
+base/range/exponent cutoff mapping. Candidate profiles should be treated as
+experimental until validated against sweeps and problem-tune guardrails. The
+built-in `balanced` profile is also a tuned approximation; it is not a measured
+SID chip profile.
 
 ### Stream Samples
 
@@ -323,10 +359,10 @@ tunes.
 ## Current Limits
 
 The renderer is still intentionally approximate. It can run direct `play`
-address tunes and many interrupt-driven tunes, including simple RSID cases, but
-it does not yet emulate a full C64 main loop, BASIC RSID startup, ROM behavior,
-cycle-exact SID behavior, true transistor-level combined waveforms, or a
-reSID-grade analog filter model.
+address tunes and many interrupt-driven tunes, including simple RSID cases and
+many BASIC RSID launchers, but it does not yet emulate a full C64 main loop,
+complete BASIC/KERNAL ROM behavior, cycle-exact SID behavior, true
+transistor-level combined waveforms, or a reSID-grade analog filter model.
 
 The SID audio path does include separate 6581/8580 cutoff curves, non-linear
 6581-style filter drive, model-specific mixer/output shaping, D418 sample
