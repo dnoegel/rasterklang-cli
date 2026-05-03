@@ -1,6 +1,6 @@
 package c64
 
-// This file builds structured CPU errors with memory diagnostics.
+// Builds structured CPU errors with memory diagnostics.
 
 import "fmt"
 

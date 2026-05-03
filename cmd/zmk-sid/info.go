@@ -1,6 +1,6 @@
 package main
 
-// This file implements SID metadata reporting.
+// Implements SID metadata reporting.
 
 import (
 	"flag"

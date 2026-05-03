@@ -1,6 +1,6 @@
 package basic
 
-// This file implements BASIC music extension statements that write SID registers.
+// Implements BASIC music extension statements that write SID registers.
 
 import "math"
 

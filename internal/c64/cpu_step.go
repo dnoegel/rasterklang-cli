@@ -1,6 +1,6 @@
 package c64
 
-// This file decodes and executes one 6502/6510 instruction.
+// Decodes and executes one 6502/6510 instruction.
 
 func (c *CPU) Step() (int, error) {
 	cycles, err := c.step()

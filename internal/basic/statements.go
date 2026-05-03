@@ -1,6 +1,6 @@
 package basic
 
-// This file implements core BASIC statements that mutate runtime, memory, and flow.
+// Implements core BASIC statements that mutate runtime, memory, and flow.
 
 import "fmt"
 

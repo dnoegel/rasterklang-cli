@@ -1,6 +1,6 @@
 package basic
 
-// This file contains C64 BASIC token constants and display names.
+// Contains C64 BASIC token constants and display names.
 
 const (
 	tokenEnd       = 0x80

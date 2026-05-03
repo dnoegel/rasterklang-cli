@@ -1,6 +1,6 @@
 package c64
 
-// This file models enough VIC-II and CIA timer state for SID playback timing.
+// Models enough VIC-II and CIA timer state for SID playback timing.
 
 const (
 	vicD011 = 0xd011

@@ -1,6 +1,6 @@
 package main
 
-// This file implements heuristic SID duration estimation.
+// Implements heuristic SID duration estimation.
 
 import (
 	"flag"

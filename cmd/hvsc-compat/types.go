@@ -1,6 +1,6 @@
 package main
 
-// This file contains shared scan configuration, result, and diagnostic types.
+// Contains shared scan configuration, result, and diagnostic types.
 
 import "fmt"
 

@@ -1,6 +1,6 @@
 package main
 
-// This file contains shared duration and sound-profile helpers.
+// Contains shared duration and sound-profile helpers.
 
 import (
 	"fmt"

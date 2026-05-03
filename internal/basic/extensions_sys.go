@@ -1,6 +1,6 @@
 package basic
 
-// This file handles SYS-based BASIC music helper extensions.
+// Handles SYS-based BASIC music helper extensions.
 
 func (r *Runner) customSYSStatement(addr uint16, content []byte, pos int) (bool, error) {
 	if r.looksLikeSoundMasterInstaller(addr) {

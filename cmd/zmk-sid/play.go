@@ -1,6 +1,6 @@
 package main
 
-// This file implements streaming playback and progress output.
+// Implements streaming playback and progress output.
 
 import (
 	"flag"

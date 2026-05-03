@@ -1,6 +1,6 @@
 package main
 
-// This file implements offline WAV rendering.
+// Implements offline WAV rendering.
 
 import (
 	"flag"

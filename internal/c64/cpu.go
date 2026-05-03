@@ -1,6 +1,6 @@
 package c64
 
-// This file defines 6510 CPU register state and shared flag constants.
+// Defines 6510 CPU register state and shared flag constants.
 
 const (
 	flagC byte = 1 << 0

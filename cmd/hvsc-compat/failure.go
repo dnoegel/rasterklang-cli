@@ -1,6 +1,6 @@
 package main
 
-// This file maps playback errors into report buckets and structured fields.
+// Maps playback errors into report buckets and structured fields.
 
 import (
 	"errors"

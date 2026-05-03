@@ -1,6 +1,6 @@
 package basic
 
-// This file contains line and statement navigation helpers for BASIC control flow.
+// Contains line and statement navigation helpers for BASIC control flow.
 
 func (r *Runner) gotoLine(line int) error {
 	idx, ok := r.program.lineIndex[line]

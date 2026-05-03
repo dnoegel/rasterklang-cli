@@ -1,6 +1,6 @@
 package main
 
-// This file implements the PCM/SID analysis command.
+// Implements the PCM/SID analysis command.
 
 import (
 	"flag"
