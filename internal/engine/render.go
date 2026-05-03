@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/dnoegel/zmk-sid/internal/basic"
@@ -362,6 +363,104 @@ func (s *Stream) ReadSamples(dst []int16) (int, error) {
 	return written, nil
 }
 
+// SkipSamples advances the stream without materializing PCM for whole frames.
+//
+// It preserves CPU, bus, SID, and audio-clock state so samples read after the
+// skip match samples produced by reading and discarding the same span.
+func (s *Stream) SkipSamples(samples int) error {
+	return s.skipSamples(samples, false)
+}
+
+// FastForwardSamples advances the stream with approximate SID state updates.
+//
+// CPU, RAM, I/O timers, SID register writes, BASIC execution, and playback
+// frame scheduling still run through the normal engine path. SID oscillator and
+// envelope state are advanced approximately without rendering discarded audio.
+func (s *Stream) FastForwardSamples(samples int) error {
+	return s.skipSamples(samples, true)
+}
+
+func (s *Stream) skipSamples(samples int, fast bool) error {
+	if samples < 0 {
+		return fmt.Errorf("engine: samples to skip must not be negative")
+	}
+	if samples == 0 {
+		return nil
+	}
+
+	if pending := len(s.pending); pending > 0 {
+		consume := samples
+		if consume > pending {
+			consume = pending
+		}
+		s.pending = s.pending[consume:]
+		s.samplePos += int64(consume)
+		samples -= consume
+	}
+
+	for samples > s.frameSampleCapacity() {
+		skipped, err := s.skipFrame(fast)
+		if err != nil {
+			return err
+		}
+		if skipped == 0 {
+			break
+		}
+		samples -= skipped
+	}
+
+	buf := make([]int16, 4096)
+	for samples > 0 {
+		chunk := len(buf)
+		if chunk > samples {
+			chunk = samples
+		}
+		n, err := s.ReadSamples(buf[:chunk])
+		samples -= n
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("engine: skip made no progress")
+		}
+	}
+	return nil
+}
+
+func (s *Stream) skipFrame(fast bool) (int, error) {
+	audio := newAudioClock(s.chip, nil, s.cyclesPerSample, s.cycleAcc, s.subSum, s.subCount, nil)
+	audio.discard = true
+	audio.fastForward = fast
+	if err := s.renderFrame(audio); err != nil {
+		s.storeAudioClock(audio)
+		skipped := audio.emitted
+		s.samplePos += int64(skipped)
+		return skipped, err
+	}
+	s.storeAudioClock(audio)
+	skipped := audio.emitted
+	s.samplePos += int64(skipped)
+	return skipped, nil
+}
+
+func (s *Stream) storeAudioClock(audio *audioClock) {
+	s.cycleAcc = audio.cycleAcc
+	s.subSum = audio.subSum
+	s.subCount = audio.subCount
+}
+
+func (s *Stream) frameSampleCapacity() int {
+	cycles := s.cyclesPerFrame
+	if maxCycles := float64(s.maxPlayCycles); maxCycles > cycles {
+		cycles = maxCycles
+	}
+	samples := int(math.Ceil(cycles/s.cyclesPerSample)) + s.chip.Oversample() + 16
+	if samples < 1 {
+		return 1
+	}
+	return samples
+}
+
 func (s *Stream) renderFrame(audio *audioClock) error {
 	if s.continuous {
 		return s.renderContinuousFrame(audio)
@@ -599,6 +698,9 @@ type audioClock struct {
 	subCount           int
 	overflow           *[]int16
 	onSample           func(int16)
+	discard            bool
+	fastForward        bool
+	emitted            int
 }
 
 func newAudioClock(chip *sid.Chip, pcm []int16, cyclesPerSample, cycleAcc, subSum float64, subCount int, overflow *[]int16) *audioClock {
@@ -616,13 +718,24 @@ func newAudioClock(chip *sid.Chip, pcm []int16, cyclesPerSample, cycleAcc, subSu
 }
 
 func (a *audioClock) addCycles(cycles float64) {
+	if a.discard && a.fastForward {
+		a.fastForwardCycles(cycles)
+		return
+	}
 	a.cycleAcc += cycles
 	for a.cycleAcc >= a.cyclesPerSubSample {
-		a.subSum += a.chip.RenderSubSample()
+		subSample := a.chip.RenderSubSample()
+		if !a.discard || a.subCount+1 < a.oversample {
+			a.subSum += subSample
+		}
 		a.subCount++
 		if a.subCount == a.oversample {
-			sample := sid.MixSubSamples(a.subSum, a.subCount)
-			a.emit(sample)
+			if a.discard {
+				a.emit(0)
+			} else {
+				sample := sid.MixSubSamples(a.subSum, a.subCount)
+				a.emit(sample)
+			}
 			a.subSum = 0
 			a.subCount = 0
 		}
@@ -630,7 +743,46 @@ func (a *audioClock) addCycles(cycles float64) {
 	}
 }
 
+func (a *audioClock) fastForwardCycles(cycles float64) {
+	a.cycleAcc += cycles
+	steps := int(a.cycleAcc / a.cyclesPerSubSample)
+	if steps <= 0 {
+		return
+	}
+	a.cycleAcc -= float64(steps) * a.cyclesPerSubSample
+	a.chip.FastForwardSubSamples(steps)
+
+	totalSubSamples := a.subCount + steps
+	samples := totalSubSamples / a.oversample
+	a.subCount = totalSubSamples % a.oversample
+	a.subSum = 0
+	a.emitSilent(samples)
+}
+
+func (a *audioClock) emitSilent(samples int) {
+	if samples <= 0 {
+		return
+	}
+	a.emitted += samples
+	if len(a.pcm) > 0 {
+		available := len(a.pcm) - a.pos
+		if available > samples {
+			available = samples
+		}
+		for i := 0; i < available; i++ {
+			a.pcm[a.pos+i] = 0
+		}
+		a.pos += available
+	}
+	if a.onSample != nil {
+		for i := 0; i < samples; i++ {
+			a.onSample(0)
+		}
+	}
+}
+
 func (a *audioClock) emit(sample int16) {
+	a.emitted++
 	if a.pos < len(a.pcm) {
 		a.pcm[a.pos] = sample
 		a.pos++

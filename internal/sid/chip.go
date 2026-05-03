@@ -313,6 +313,18 @@ func (c *Chip) RenderSubSample() float64 {
 	return c.sample()
 }
 
+// FastForwardSubSamples advances the SID's time-dependent state without
+// computing audible output. It is intended for approximate interactive seeking,
+// not reference rendering.
+func (c *Chip) FastForwardSubSamples(samples int) {
+	if samples <= 0 {
+		return
+	}
+	for i := range c.voices {
+		c.fastForwardVoice(i, samples)
+	}
+}
+
 func MixSubSamples(sum float64, count int) int16 {
 	if count <= 0 {
 		return 0
@@ -451,6 +463,44 @@ func (c *Chip) sampleVoice(i int) float64 {
 	wave := c.waveform(i, v, control, pw, step)
 	v.lastOutput = c.applyVoiceDAC(v, c.applyVoiceDeclick(v, wave*env))
 	return v.lastOutput
+}
+
+func (c *Chip) fastForwardVoice(i int, samples int) {
+	base := i * 7
+	freq := uint32(c.regs[base]) | uint32(c.regs[base+1])<<8
+	control := c.regs[base+4]
+	ad := c.regs[base+5]
+	sr := c.regs[base+6]
+
+	v := &c.voices[i]
+	if control&0x08 != 0 {
+		v.phase = 0
+		v.wrapped = false
+	} else {
+		if control&0x02 != 0 && c.voices[(i+2)%3].wrapped {
+			v.phase = 0
+		}
+		step := uint64(uint32(float64(freq) * c.cpuHz / c.sampleRate * 256.0))
+		before := uint64(v.phase)
+		delta := step * uint64(samples)
+		wraps := (before + delta) >> 32
+		v.phase = uint32(before + delta)
+		v.wrapped = wraps > 0
+		if control&0x80 != 0 {
+			for ; wraps > 0; wraps-- {
+				v.noise = nextNoise(v.noise)
+			}
+		}
+	}
+
+	v.env.advance(ad>>4, ad&0x0f, sr>>4, sr&0x0f, float64(samples)*c.cpuHz/c.sampleRate)
+	if v.declickRemaining > 0 {
+		v.declickRemaining -= samples
+		if v.declickRemaining < 0 {
+			v.declickRemaining = 0
+		}
+	}
+	c.fastForwardFloatingWave(v, samples)
 }
 
 func (c *Chip) waveform(i int, v *voice, control byte, pulseWidth uint16, step uint32) float64 {
@@ -626,6 +676,28 @@ func (c *Chip) floatingWaveOutput(v *voice) float64 {
 		v.floatingOutput = 0
 	}
 	return v.floatingOutput
+}
+
+func (c *Chip) fastForwardFloatingWave(v *voice, samples int) {
+	if samples <= 0 {
+		return
+	}
+	if v.floatingTTL > 0 {
+		if samples < v.floatingTTL {
+			v.floatingTTL -= samples
+			return
+		}
+		samples -= v.floatingTTL
+		v.floatingTTL = 0
+	}
+	if samples <= 0 || v.floatingOutput == 0 {
+		return
+	}
+	coeff := 1 - math.Exp(-2*math.Pi*12/c.sampleRate)
+	v.floatingOutput *= math.Pow(1-coeff, float64(samples))
+	if math.Abs(v.floatingOutput) < 1e-5 {
+		v.floatingOutput = 0
+	}
 }
 
 func (c *Chip) floatingWaveSamples() int {

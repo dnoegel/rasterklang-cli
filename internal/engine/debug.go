@@ -197,6 +197,113 @@ func (s *DebugStream) ReadSamples(dst []int16) (int, error) {
 	return written, nil
 }
 
+// SkipSamples advances the debug stream without materializing PCM for whole
+// frames. Trace events still follow the stream's configured trace mask.
+func (s *DebugStream) SkipSamples(samples int) error {
+	return s.skipSamples(samples, false)
+}
+
+// FastForwardSamples advances the debug stream with approximate SID state
+// updates and suppresses debug tracing while it seeks.
+func (s *DebugStream) FastForwardSamples(samples int) error {
+	return s.withoutTracing(func() error {
+		return s.skipSamples(samples, true)
+	})
+}
+
+func (s *DebugStream) skipSamples(samples int, fast bool) error {
+	if s.stepActive {
+		return fmt.Errorf("engine: cannot SkipSamples while instruction stepping is active")
+	}
+	if samples < 0 {
+		return fmt.Errorf("engine: samples to skip must not be negative")
+	}
+	if samples == 0 {
+		return nil
+	}
+
+	st := s.state
+	if pending := len(st.pending); pending > 0 {
+		consume := samples
+		if consume > pending {
+			consume = pending
+		}
+		st.pending = st.pending[consume:]
+		st.samplePos += int64(consume)
+		samples -= consume
+	}
+
+	for samples > s.frameSampleCapacity() {
+		skipped, err := s.skipFrame(fast)
+		if err != nil {
+			return err
+		}
+		if skipped == 0 {
+			break
+		}
+		samples -= skipped
+	}
+
+	buf := make([]int16, 4096)
+	for samples > 0 {
+		chunk := len(buf)
+		if chunk > samples {
+			chunk = samples
+		}
+		n, err := s.ReadSamples(buf[:chunk])
+		samples -= n
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("engine: skip made no progress")
+		}
+	}
+	return nil
+}
+
+func (s *DebugStream) skipFrame(fast bool) (int, error) {
+	st := s.state
+	audio := newAudioClock(st.chip, nil, st.cyclesPerSample, st.cycleAcc, st.subSum, st.subCount, nil)
+	audio.discard = true
+	audio.fastForward = fast
+	if !fast {
+		s.installAudioHook(audio)
+	}
+	if err := s.renderFrame(audio); err != nil {
+		s.storeAudioClock(audio)
+		skipped := audio.emitted
+		st.samplePos += int64(skipped)
+		return skipped, err
+	}
+	s.storeAudioClock(audio)
+	skipped := audio.emitted
+	st.samplePos += int64(skipped)
+	return skipped, nil
+}
+
+func (s *DebugStream) withoutTracing(fn func() error) error {
+	st := s.state
+	savedMask := s.mask
+	savedTrace := s.trace
+	savedHooks := st.bus.Hooks
+	s.mask = 0
+	s.trace = nil
+	st.bus.Hooks = c64.Hooks{}
+	if st.basic != nil {
+		st.basic.SetTraceHook(nil)
+	}
+	defer func() {
+		s.mask = savedMask
+		s.trace = savedTrace
+		st.bus.Hooks = savedHooks
+		if st.basic != nil {
+			s.installHooks()
+		}
+	}()
+	return fn()
+}
+
 func (s *DebugStream) StepFrame() ([]int16, error) {
 	if s.stepActive {
 		return nil, fmt.Errorf("engine: cannot StepFrame while instruction stepping is active")
@@ -735,7 +842,11 @@ func (s *DebugStream) storeAudioClock(audio *audioClock) {
 }
 
 func (s *DebugStream) frameSampleCapacity() int {
-	samples := int(math.Ceil(s.state.cyclesPerFrame/s.state.cyclesPerSample)) + s.state.chip.Oversample() + 16
+	cycles := s.state.cyclesPerFrame
+	if maxCycles := float64(s.state.maxPlayCycles); maxCycles > cycles {
+		cycles = maxCycles
+	}
+	samples := int(math.Ceil(cycles/s.state.cyclesPerSample)) + s.state.chip.Oversample() + 16
 	if samples < 32 {
 		return 32
 	}

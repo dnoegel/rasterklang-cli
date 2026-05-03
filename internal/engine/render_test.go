@@ -409,6 +409,147 @@ func TestStreamMatchesRenderWithSmallChunks(t *testing.T) {
 	}
 }
 
+func TestStreamSkipSamplesMatchesDiscardedRead(t *testing.T) {
+	tune, err := sidfile.Parse(syntheticPSID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sampleRate = 22050
+	const skipSamples = 5000
+	const readSamples = 2048
+
+	wantStream, err := NewStream(tune, StreamOptions{Subtune: 1, SampleRate: sampleRate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	discard := make([]int16, skipSamples)
+	if n, err := wantStream.ReadSamples(discard); err != nil || n != len(discard) {
+		t.Fatalf("discard ReadSamples = %d, %v; want %d, nil", n, err, len(discard))
+	}
+	want := make([]int16, readSamples)
+	if n, err := wantStream.ReadSamples(want); err != nil || n != len(want) {
+		t.Fatalf("want ReadSamples = %d, %v; want %d, nil", n, err, len(want))
+	}
+
+	gotStream, err := NewStream(tune, StreamOptions{Subtune: 1, SampleRate: sampleRate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gotStream.SkipSamples(skipSamples); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]int16, readSamples)
+	if n, err := gotStream.ReadSamples(got); err != nil || n != len(got) {
+		t.Fatalf("got ReadSamples = %d, %v; want %d, nil", n, err, len(got))
+	}
+
+	if !slices.Equal(want, got) {
+		t.Fatal("stream output after SkipSamples differs from reading and discarding")
+	}
+	if gotStream.samplePos != int64(skipSamples+readSamples) {
+		t.Fatalf("samplePos = %d, want %d", gotStream.samplePos, skipSamples+readSamples)
+	}
+}
+
+func TestStreamFastForwardSamplesAdvancesPosition(t *testing.T) {
+	tune, err := sidfile.Parse(syntheticPSID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const skipSamples = 5000
+	stream, err := NewStream(tune, StreamOptions{Subtune: 1, SampleRate: 22050})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.FastForwardSamples(skipSamples); err != nil {
+		t.Fatal(err)
+	}
+	if stream.samplePos != skipSamples {
+		t.Fatalf("samplePos = %d, want %d", stream.samplePos, skipSamples)
+	}
+	buf := make([]int16, 512)
+	if n, err := stream.ReadSamples(buf); err != nil || n != len(buf) {
+		t.Fatalf("ReadSamples after FastForwardSamples = %d, %v; want %d, nil", n, err, len(buf))
+	}
+}
+
+func TestDebugStreamSkipSamplesMatchesDiscardedRead(t *testing.T) {
+	tune, err := sidfile.Parse(syntheticPSID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sampleRate = 22050
+	const skipSamples = 5000
+	const readSamples = 2048
+
+	wantStream, err := NewDebugStream(tune, DebugOptions{Subtune: 1, SampleRate: sampleRate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	discard := make([]int16, skipSamples)
+	if n, err := wantStream.ReadSamples(discard); err != nil || n != len(discard) {
+		t.Fatalf("discard ReadSamples = %d, %v; want %d, nil", n, err, len(discard))
+	}
+	want := make([]int16, readSamples)
+	if n, err := wantStream.ReadSamples(want); err != nil || n != len(want) {
+		t.Fatalf("want ReadSamples = %d, %v; want %d, nil", n, err, len(want))
+	}
+
+	gotStream, err := NewDebugStream(tune, DebugOptions{Subtune: 1, SampleRate: sampleRate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gotStream.SkipSamples(skipSamples); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]int16, readSamples)
+	if n, err := gotStream.ReadSamples(got); err != nil || n != len(got) {
+		t.Fatalf("got ReadSamples = %d, %v; want %d, nil", n, err, len(got))
+	}
+
+	if !slices.Equal(want, got) {
+		t.Fatal("debug stream output after SkipSamples differs from reading and discarding")
+	}
+	if got := gotStream.Snapshot().Sample; got != int64(skipSamples+readSamples) {
+		t.Fatalf("snapshot sample = %d, want %d", got, skipSamples+readSamples)
+	}
+}
+
+func TestDebugStreamFastForwardSamplesSuppressesTrace(t *testing.T) {
+	tune, err := sidfile.Parse(syntheticPSID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const skipSamples = 5000
+	stream, err := NewDebugStream(tune, DebugOptions{
+		Subtune:        1,
+		SampleRate:     22050,
+		TraceMask:      TraceFrames | TraceCPUSteps | TraceSIDWrites | TraceAudio,
+		MaxTraceEvents: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.FastForwardSamples(skipSamples); err != nil {
+		t.Fatal(err)
+	}
+	if got := stream.Snapshot().Sample; got != int64(skipSamples) {
+		t.Fatalf("snapshot sample = %d, want %d", got, skipSamples)
+	}
+	events, _ := stream.ReadTrace(1024, 0)
+	if len(events) != 0 {
+		t.Fatalf("FastForwardSamples emitted %d trace events, want none", len(events))
+	}
+	buf := make([]int16, 512)
+	if n, err := stream.ReadSamples(buf); err != nil || n != len(buf) {
+		t.Fatalf("ReadSamples after FastForwardSamples = %d, %v; want %d, nil", n, err, len(buf))
+	}
+	events, _ = stream.ReadTrace(1024, 0)
+	if len(events) == 0 {
+		t.Fatal("ReadSamples after FastForwardSamples did not restore tracing")
+	}
+}
+
 func TestRenderAppliesSoundProfile(t *testing.T) {
 	tune, err := sidfile.Parse(syntheticPSID())
 	if err != nil {

@@ -14,6 +14,10 @@ type SampleSource interface {
 	ReadSamples([]int16) (int, error)
 }
 
+type sampleSkipper interface {
+	SkipSamples(int) error
+}
+
 type SourceFactory func() (SampleSource, error)
 
 type Options struct {
@@ -90,6 +94,9 @@ func WithSampleMeter(fn func(int)) SourceOption {
 }
 
 func SkipSamples(source SampleSource, samples int) error {
+	if skipper, ok := source.(sampleSkipper); ok {
+		return skipper.SkipSamples(samples)
+	}
 	buf := make([]int16, 4096)
 	for samples > 0 {
 		chunk := len(buf)

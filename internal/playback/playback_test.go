@@ -111,3 +111,31 @@ func TestSkipSamples(t *testing.T) {
 		t.Fatalf("sample = %d, want 3", buf[0])
 	}
 }
+
+func TestSkipSamplesUsesSourceFastPath(t *testing.T) {
+	source := &skippingSource{}
+	if err := SkipSamples(source, 123); err != nil {
+		t.Fatal(err)
+	}
+	if source.skipped != 123 {
+		t.Fatalf("skipped = %d, want 123", source.skipped)
+	}
+	if source.read {
+		t.Fatal("ReadSamples was called instead of the source fast path")
+	}
+}
+
+type skippingSource struct {
+	skipped int
+	read    bool
+}
+
+func (s *skippingSource) ReadSamples([]int16) (int, error) {
+	s.read = true
+	return 0, io.EOF
+}
+
+func (s *skippingSource) SkipSamples(samples int) error {
+	s.skipped += samples
+	return nil
+}

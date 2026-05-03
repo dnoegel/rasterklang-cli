@@ -1500,6 +1500,37 @@ Profile-format uncertainty:
   need targeted compatibility tests before relying on them for arbitrary BASIC
   programs.
 
+### Stream fast-forward for playback start offsets
+
+- `zmk-sid play -start` previously skipped by reading PCM from the stream into a
+  scratch buffer and discarding it. That was correct, but it paid the normal PCM
+  output cost for audio that would never be heard.
+- `Stream` and `DebugStream` now expose `SkipSamples`, and the playback helper
+  uses that fast path when a source provides it. Whole frames are advanced with
+  a discard audio clock, so CPU, bus, SID oscillator/envelope/filter state,
+  delayed SID writes, CIA-speed refresh, BASIC playback, continuous playback,
+  idle playback, snapshots, and configured debug traces still move through the
+  normal engine path.
+- Added an explicit approximate `FastForwardSamples` path for interactive
+  seeking. It keeps CPU execution, RAM mutation, hardware timer progression,
+  SID register writes, frame scheduling, BASIC, continuous, and idle playback
+  on the normal code path, but advances SID oscillator/envelope state with a
+  cheap coarse update instead of rendering every discarded SID sub-sample.
+  `DebugStream.FastForwardSamples` temporarily suppresses trace hooks while
+  seeking because UI seeks do not need instruction/audio/debug events.
+- The fast path intentionally does not translate seconds into a player-specific
+  song position. It remains simulation-based seeking; it just avoids
+  materializing PCM for whole skipped frames. The final partial frame still uses
+  ordinary reading/discarding so sample alignment and pending overflow samples
+  stay exact.
+- Expected improvement: `play -start 45s` and similar offsets spend less work
+  on discarded output while preserving the samples heard after the skip.
+- Remaining uncertainty: the expensive SID sample-state update still has to run
+  for exact generic seeking. The turbo path trades exact analog/SID settling
+  during the skipped span for responsiveness, so the first samples after a seek
+  can differ from a fully rendered skip. A later snapshot index would be needed
+  for sublinear repeated exact seeks.
+
 ## Recommended Next Steps
 
 1. Expand explicit sound profiles.
