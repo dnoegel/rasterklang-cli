@@ -1,5 +1,7 @@
 package main
 
+// This file implements heuristic SID duration estimation.
+
 import (
 	"flag"
 	"fmt"

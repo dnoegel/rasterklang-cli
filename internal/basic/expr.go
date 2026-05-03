@@ -1,5 +1,7 @@
 package basic
 
+// This file evaluates numeric/string BASIC expressions and memory-backed variables.
+
 import (
 	"fmt"
 	"math"

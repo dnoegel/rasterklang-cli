@@ -1,5 +1,7 @@
 package main
 
+// This file renders subtunes and applies compatibility filters/checks.
+
 import (
 	"fmt"
 	"math"

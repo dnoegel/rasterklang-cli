@@ -1,5 +1,7 @@
 package c64
 
+// This file maps opcodes to short mnemonic labels for diagnostics.
+
 func Mnemonic(op byte) string {
 	switch op {
 	case 0x00:

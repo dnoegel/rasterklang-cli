@@ -1,5 +1,7 @@
 package main
 
+// This file collects SID inputs and coordinates parallel compatibility jobs.
+
 import (
 	"fmt"
 	"io/fs"

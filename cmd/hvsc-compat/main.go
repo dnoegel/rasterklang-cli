@@ -1,5 +1,7 @@
 package main
 
+// This file wires the hvsc-compat CLI flags and top-level scan flow.
+
 import (
 	"flag"
 	"fmt"

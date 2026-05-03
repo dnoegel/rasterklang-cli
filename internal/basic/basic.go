@@ -1,5 +1,7 @@
 package basic
 
+// This file defines parsed BASIC programs and the Runner dispatch loop.
+
 import (
 	"fmt"
 

@@ -1,5 +1,7 @@
 package c64
 
+// This file runs bounded subroutine and IRQ calls around the stepper.
+
 func (c *CPU) RunSubroutine(addr uint16, a byte, maxCycles int) (int, error) {
 	return c.RunSubroutineWithHook(addr, a, maxCycles, nil)
 }

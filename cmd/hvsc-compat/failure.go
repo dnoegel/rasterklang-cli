@@ -1,5 +1,7 @@
 package main
 
+// This file maps playback errors into report buckets and structured fields.
+
 import (
 	"errors"
 	"fmt"

@@ -1,5 +1,7 @@
 package main
 
+// This file classifies low-RMS renders using debug trace diagnostics.
+
 import (
 	"errors"
 	"fmt"

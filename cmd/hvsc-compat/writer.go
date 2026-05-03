@@ -1,5 +1,7 @@
 package main
 
+// This file writes compatibility failures as tab-separated report rows.
+
 import (
 	"encoding/csv"
 	"io"

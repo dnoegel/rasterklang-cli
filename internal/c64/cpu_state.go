@@ -1,5 +1,7 @@
 package c64
 
+// This file captures/restores CPU state and resolves addressing modes.
+
 type cpuSnapshot struct {
 	A  byte
 	X  byte

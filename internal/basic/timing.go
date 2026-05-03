@@ -1,5 +1,7 @@
 package basic
 
+// This file contains the approximate C64 BASIC statement timing model.
+
 import (
 	"fmt"
 	"strconv"

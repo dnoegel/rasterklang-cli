@@ -1,5 +1,7 @@
 package main
 
+// This file implements SID metadata reporting.
+
 import (
 	"flag"
 	"fmt"

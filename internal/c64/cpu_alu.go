@@ -1,5 +1,7 @@
 package c64
 
+// This file contains register operations, unofficial opcodes, stack, and branch helpers.
+
 func (c *CPU) lda(v byte) {
 	c.A = v
 	c.setZN(c.A)

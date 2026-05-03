@@ -1,5 +1,7 @@
 package basic
 
+// This file implements core BASIC statements that mutate runtime, memory, and flow.
+
 import "fmt"
 
 func (r *Runner) poke(content []byte) error {

@@ -1,5 +1,7 @@
 package c64
 
+// This file builds structured CPU errors with memory diagnostics.
+
 import "fmt"
 
 type CycleLimitError struct {

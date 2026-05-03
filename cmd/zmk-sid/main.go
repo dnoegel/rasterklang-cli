@@ -1,5 +1,7 @@
 package main
 
+// This file dispatches top-level zmk-sid CLI commands.
+
 import (
 	"fmt"
 	"os"

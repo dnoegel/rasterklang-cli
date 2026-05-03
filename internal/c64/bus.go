@@ -1,5 +1,7 @@
 package c64
 
+// This file models the C64 memory map and SID/ROM/IO access hooks.
+
 import (
 	"fmt"
 

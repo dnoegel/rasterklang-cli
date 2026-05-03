@@ -1,5 +1,7 @@
 package main
 
+// This file implements the PCM/SID analysis command.
+
 import (
 	"flag"
 	"fmt"

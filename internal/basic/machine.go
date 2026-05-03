@@ -1,5 +1,7 @@
 package basic
 
+// This file bridges BASIC SYS calls into the CPU and small BASIC ROM stubs.
+
 import (
 	"math"
 	"strconv"

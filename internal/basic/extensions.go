@@ -1,5 +1,7 @@
 package basic
 
+// This file implements BASIC music extension statements that write SID registers.
+
 import "math"
 
 func (r *Runner) soundMasterStatement(content []byte) error {

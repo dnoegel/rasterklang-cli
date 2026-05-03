@@ -1,5 +1,7 @@
 package main
 
+// This file compares duration estimates against HVSC Songlengths data.
+
 import (
 	"flag"
 	"fmt"

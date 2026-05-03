@@ -1,5 +1,7 @@
 package main
 
+// This file implements offline WAV rendering.
+
 import (
 	"flag"
 	"fmt"

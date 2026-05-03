@@ -1,5 +1,7 @@
 package main
 
+// This file implements streaming playback and progress output.
+
 import (
 	"flag"
 	"fmt"
