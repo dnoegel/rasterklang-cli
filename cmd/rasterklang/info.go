@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 func info(args []string) error {
@@ -16,7 +16,7 @@ func info(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: zmk-sid info <file.sid>")
+		return fmt.Errorf("usage: rasterklang info <file.sid>")
 	}
 
 	tune, err := sid.LoadFile(fs.Arg(0))

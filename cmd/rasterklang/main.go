@@ -1,6 +1,6 @@
 package main
 
-// Dispatches top-level zmk-sid CLI commands.
+// Dispatches top-level rasterklang CLI commands.
 
 import (
 	"fmt"
@@ -32,21 +32,21 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "zmk-sid:", err)
+		fmt.Fprintln(os.Stderr, "rasterklang:", err)
 		os.Exit(1)
 	}
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `zmk-sid is a pure-Go SID engine POC.
+	fmt.Fprintf(os.Stderr, `rasterklang is a pure-Go SID engine POC.
 
 Usage:
-  zmk-sid info <file.sid>
-  zmk-sid play [options] <file.sid>
-  zmk-sid render [options] <file.sid>
-  zmk-sid analyze [options] <file.sid|file.wav>
-  zmk-sid duration [options] <file.sid>
-  zmk-sid duration-validate [options] -songlengths Songlengths.md5 <file.sid|dir>...
+  rasterklang info <file.sid>
+  rasterklang play [options] <file.sid>
+  rasterklang render [options] <file.sid>
+  rasterklang analyze [options] <file.sid|file.wav>
+  rasterklang duration [options] <file.sid>
+  rasterklang duration-validate [options] -songlengths Songlengths.md5 <file.sid|dir>...
 
 Play options:
   -subtune int

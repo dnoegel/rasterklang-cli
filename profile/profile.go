@@ -1,5 +1,5 @@
 // Package profile defines the versioned SID sound profile format shared by
-// zmk-sid and zmk-optimize.
+// rasterklang and rasterklang-optimize.
 package profile
 
 import (
@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const SchemaVersion = "zmk.sid.profile.v1"
+const SchemaVersion = "rasterklang.sid.profile.v1"
 
 type Profile struct {
 	SchemaVersion string         `json:"schemaVersion"`

@@ -1,4 +1,4 @@
-# zmk-sid
+# rasterklang
 
 Pure-Go SID engine and CLI for PSID/RSID tunes.
 
@@ -20,36 +20,36 @@ currently provides:
 ## CLI
 
 Download the latest release for your platform from
-<https://github.com/dnoegel/zmk-sid/releases/latest>:
+<https://github.com/dnoegel/rasterklang/releases/latest>:
 
-- `zmk-sid-linux-amd64`
-- `zmk-sid-linux-arm64`
-- `zmk-sid-macos-amd64`
-- `zmk-sid-macos-arm64`
+- `rasterklang-linux-amd64`
+- `rasterklang-linux-arm64`
+- `rasterklang-macos-amd64`
+- `rasterklang-macos-arm64`
 
 Each release asset includes a `.tar.gz` archive and a `.sha256` checksum. Unpack
 the archive and put the binary somewhere on your `PATH`:
 
 ```sh
-tar -xzf zmk-sid-linux-amd64.tar.gz
-./zmk-sid-linux-amd64 play path/to/tune.sid
+tar -xzf rasterklang-linux-amd64.tar.gz
+./rasterklang-linux-amd64 play path/to/tune.sid
 ```
 
 If you have Go installed, you can also install the CLI from the module:
 
 ```sh
-go install github.com/dnoegel/zmk-sid/cmd/zmk-sid@latest
+go install github.com/dnoegel/rasterklang/cmd/rasterklang@latest
 ```
 
 For development from a checkout:
 
 ```sh
-go run ./cmd/zmk-sid play path/to/tune.sid
-go run ./cmd/zmk-sid info path/to/tune.sid
-go run ./cmd/zmk-sid duration path/to/tune.sid
-go run ./cmd/zmk-sid duration-validate -songlengths ~/C64Music/DOCUMENTS/Songlengths.md5 path/to/tunes
-go run ./cmd/zmk-sid render -duration 30s -o tune.wav path/to/tune.sid
-go run ./cmd/zmk-sid analyze -duration 30s path/to/tune.sid
+go run ./cmd/rasterklang play path/to/tune.sid
+go run ./cmd/rasterklang info path/to/tune.sid
+go run ./cmd/rasterklang duration path/to/tune.sid
+go run ./cmd/rasterklang duration-validate -songlengths ~/C64Music/DOCUMENTS/Songlengths.md5 path/to/tunes
+go run ./cmd/rasterklang render -duration 30s -o tune.wav path/to/tune.sid
+go run ./cmd/rasterklang analyze -duration 30s path/to/tune.sid
 ```
 
 ## Releases
@@ -77,7 +77,7 @@ Prints SID metadata, filterable tune type labels, and the engine's current
 support verdict:
 
 ```sh
-zmk-sid info Commando.sid
+rasterklang info Commando.sid
 ```
 
 ### `play`
@@ -85,7 +85,7 @@ zmk-sid info Commando.sid
 Streams a tune to your audio device:
 
 ```sh
-zmk-sid play -subtune 2 -duration 3m Commando.sid
+rasterklang play -subtune 2 -duration 3m Commando.sid
 ```
 
 Useful flags:
@@ -114,7 +114,7 @@ then `pw-play`) so the CLI still builds on machines without ALSA development
 headers. For direct ALSA output through the Go audio backend:
 
 ```sh
-go build -tags zmk_alsa ./cmd/zmk-sid
+go build -tags rasterklang_alsa ./cmd/rasterklang
 ```
 
 ### `render`
@@ -122,8 +122,8 @@ go build -tags zmk_alsa ./cmd/zmk-sid
 Writes mono 16-bit WAV:
 
 ```sh
-zmk-sid render -subtune 1 -duration 2m -rate 44100 -o tune.wav Commando.sid
-zmk-sid render -profile profile-candidate.json -duration 30s -o candidate.wav Commando.sid
+rasterklang render -subtune 1 -duration 2m -rate 44100 -o tune.wav Commando.sid
+rasterklang render -profile profile-candidate.json -duration 30s -o candidate.wav Commando.sid
 ```
 
 ### `analyze`
@@ -132,8 +132,8 @@ Reports peak, RMS, DC offset, maximum sample delta, clipped samples, crest
 factor, and zero crossings. It accepts SID files or mono 16-bit WAV files:
 
 ```sh
-zmk-sid analyze -duration 30s Commando.sid
-zmk-sid analyze tune.wav
+rasterklang analyze -duration 30s Commando.sid
+rasterklang analyze tune.wav
 ```
 
 ### `duration`
@@ -141,9 +141,9 @@ zmk-sid analyze tune.wav
 Estimates SID playback length without a songlength database:
 
 ```sh
-zmk-sid duration Commando.sid
-zmk-sid duration -all Commando.sid
-zmk-sid duration -budget 3s -max 8m Commando.sid
+rasterklang duration Commando.sid
+rasterklang duration -all Commando.sid
+rasterklang duration -budget 3s -max 8m Commando.sid
 ```
 
 The heuristic renders quickly at a low sample rate, watches SID register/audio
@@ -154,7 +154,7 @@ not a replacement for HVSC `Songlengths` data.
 To compare the heuristic against an HVSC songlength database:
 
 ```sh
-zmk-sid duration-validate \
+rasterklang duration-validate \
   -songlengths ~/C64Music/DOCUMENTS/Songlengths.md5 \
   -threshold 5s \
   ~/C64Music/MUSICIANS/H/Hubbard_Rob
@@ -170,7 +170,7 @@ looked up by MD5 over the full SID file content including the header.
 Import the root package:
 
 ```go
-import sid "github.com/dnoegel/zmk-sid"
+import sid "github.com/dnoegel/rasterklang"
 ```
 
 The public API intentionally keeps emulator internals under `internal/`. Apps
@@ -238,7 +238,7 @@ SID chip profile.
 
 Use `NewStream` for players, UIs, servers, or any integration that should pull
 small chunks without rendering minutes of audio up front. This is the API a
-desktop app like `zmk-player` should build on.
+desktop app like `rasterklang-player` should build on.
 
 ```go
 stream, err := sid.NewStream(tune, sid.StreamOptions{

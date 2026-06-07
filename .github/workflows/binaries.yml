@@ -36,16 +36,16 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
-            artifact: zmk-sid-linux-amd64
+            artifact: rasterklang-linux-amd64
           - goos: linux
             goarch: arm64
-            artifact: zmk-sid-linux-arm64
+            artifact: rasterklang-linux-arm64
           - goos: darwin
             goarch: amd64
-            artifact: zmk-sid-macos-amd64
+            artifact: rasterklang-macos-amd64
           - goos: darwin
             goarch: arm64
-            artifact: zmk-sid-macos-arm64
+            artifact: rasterklang-macos-arm64
 
     steps:
       - name: Check out repository
@@ -65,7 +65,7 @@ jobs:
           ARTIFACT: ${{ matrix.artifact }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o "dist/${ARTIFACT}" ./cmd/zmk-sid
+          go build -trimpath -ldflags="-s -w" -o "dist/${ARTIFACT}" ./cmd/rasterklang
           chmod +x "dist/${ARTIFACT}"
           tar -C dist -czf "dist/${ARTIFACT}.tar.gz" "${ARTIFACT}"
           (cd dist && sha256sum "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256")

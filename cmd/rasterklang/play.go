@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	sid "github.com/dnoegel/zmk-sid"
-	"github.com/dnoegel/zmk-sid/internal/playback"
+	sid "github.com/dnoegel/rasterklang"
+	"github.com/dnoegel/rasterklang/internal/playback"
 )
 
 func play(args []string) error {
@@ -38,7 +38,7 @@ func play(args []string) error {
 		}
 	})
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: zmk-sid play [options] <file.sid>")
+		return fmt.Errorf("usage: rasterklang play [options] <file.sid>")
 	}
 	if *duration < 0 {
 		return fmt.Errorf("duration must not be negative")

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dnoegel/zmk-sid/internal/sid"
+	"github.com/dnoegel/rasterklang/internal/sid"
 )
 
 func TestBRKVectorsThroughIRQVector(t *testing.T) {

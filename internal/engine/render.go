@@ -6,11 +6,11 @@ import (
 	"math"
 	"time"
 
-	"github.com/dnoegel/zmk-sid/internal/basic"
-	"github.com/dnoegel/zmk-sid/internal/c64"
-	"github.com/dnoegel/zmk-sid/internal/sid"
-	"github.com/dnoegel/zmk-sid/internal/sidfile"
-	sidprofile "github.com/dnoegel/zmk-sid/profile"
+	"github.com/dnoegel/rasterklang/internal/basic"
+	"github.com/dnoegel/rasterklang/internal/c64"
+	"github.com/dnoegel/rasterklang/internal/sid"
+	"github.com/dnoegel/rasterklang/internal/sidfile"
+	sidprofile "github.com/dnoegel/rasterklang/profile"
 )
 
 type RenderOptions struct {

@@ -6,7 +6,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/dnoegel/zmk-sid/internal/sidfile"
+	"github.com/dnoegel/rasterklang/internal/sidfile"
 )
 
 type DurationSource string

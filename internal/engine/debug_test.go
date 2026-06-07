@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/dnoegel/zmk-sid/internal/sidfile"
+	"github.com/dnoegel/rasterklang/internal/sidfile"
 )
 
 func TestDebugStreamEmitsFrameTrace(t *testing.T) {

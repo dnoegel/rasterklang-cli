@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 type durationValidationSummary struct {
@@ -43,10 +43,10 @@ func durationValidate(args []string) error {
 		return err
 	}
 	if *dbPath == "" {
-		return fmt.Errorf("usage: zmk-sid duration-validate -songlengths Songlengths.md5 <file.sid|dir>...")
+		return fmt.Errorf("usage: rasterklang duration-validate -songlengths Songlengths.md5 <file.sid|dir>...")
 	}
 	if fs.NArg() == 0 {
-		return fmt.Errorf("usage: zmk-sid duration-validate -songlengths Songlengths.md5 <file.sid|dir>...")
+		return fmt.Errorf("usage: rasterklang duration-validate -songlengths Songlengths.md5 <file.sid|dir>...")
 	}
 	if *subtune < 0 {
 		return fmt.Errorf("subtune must not be negative")

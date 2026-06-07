@@ -1,4 +1,4 @@
-module github.com/dnoegel/zmk-sid
+module github.com/dnoegel/rasterklang
 
 go 1.26
 

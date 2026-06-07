@@ -5,7 +5,7 @@ package c64
 import (
 	"fmt"
 
-	"github.com/dnoegel/zmk-sid/internal/sid"
+	"github.com/dnoegel/rasterklang/internal/sid"
 )
 
 type Bus struct {

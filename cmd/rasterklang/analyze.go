@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 func analyze(args []string) error {
@@ -22,7 +22,7 @@ func analyze(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: zmk-sid analyze [options] <file.sid|file.wav>")
+		return fmt.Errorf("usage: rasterklang analyze [options] <file.sid|file.wav>")
 	}
 	if *duration <= 0 {
 		return fmt.Errorf("duration must be positive")

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 func applySilenceDiagnostics(failure *failure, tune *sid.Tune, err error, rate int) {

@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dnoegel/zmk-sid/internal/basic"
-	"github.com/dnoegel/zmk-sid/internal/c64"
-	"github.com/dnoegel/zmk-sid/internal/sid"
-	"github.com/dnoegel/zmk-sid/internal/sidfile"
-	sidprofile "github.com/dnoegel/zmk-sid/profile"
+	"github.com/dnoegel/rasterklang/internal/basic"
+	"github.com/dnoegel/rasterklang/internal/c64"
+	"github.com/dnoegel/rasterklang/internal/sid"
+	"github.com/dnoegel/rasterklang/internal/sidfile"
+	sidprofile "github.com/dnoegel/rasterklang/profile"
 )
 
 func TestRenderSyntheticPSID(t *testing.T) {
@@ -671,7 +671,7 @@ func syntheticPSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 
@@ -707,7 +707,7 @@ func syntheticCIAUpdatePSID() []byte {
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	binary.BigEndian.PutUint32(data[18:22], 1)
 	copy(data[0x16:0x36], "Synthetic CIA")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0024)
 
@@ -734,7 +734,7 @@ func syntheticInterruptSID(magic string) []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic IRQ")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 
@@ -809,7 +809,7 @@ func syntheticContinuousInitRSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic continuous init")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 	copy(data[0x7c:], code)
@@ -837,7 +837,7 @@ func syntheticInitOnlyRSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic init-only")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 	copy(data[0x7c:], code)
@@ -865,7 +865,7 @@ func syntheticInitHaltRSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic init halt")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 	copy(data[0x7c:], code)
@@ -923,7 +923,7 @@ func syntheticInitLimitWithLoadedPlayPSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic init limit")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 
@@ -961,7 +961,7 @@ func syntheticBasicRSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic BASIC")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0016)
 	data[0x7c] = 0x01
@@ -1010,7 +1010,7 @@ func syntheticBASICLongLauncherIRQRSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic BASIC IRQ launcher")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0016)
 	data[0x7c] = byte(load & 0xff)
@@ -1048,7 +1048,7 @@ func syntheticBasicCHRGETRSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic BASIC CHRGET")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0016)
 	data[0x7c] = 0x01
@@ -1088,7 +1088,7 @@ func syntheticBasicROMRunRSID() []byte {
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Synthetic BASIC ROM RUN")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0016)
 	data[0x7c] = 0x01

@@ -221,7 +221,7 @@ func wrapSIDForTypes(magic string, load, init, play, flags uint16, payload []byt
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], "Typed Tune")
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], flags)
 	copy(data[0x7c:], payload)

@@ -3,8 +3,8 @@ package basic
 import (
 	"testing"
 
-	"github.com/dnoegel/zmk-sid/internal/c64"
-	"github.com/dnoegel/zmk-sid/internal/sid"
+	"github.com/dnoegel/rasterklang/internal/c64"
+	"github.com/dnoegel/rasterklang/internal/sid"
 )
 
 func TestRunnerExecutesDataReadForPokeLoop(t *testing.T) {

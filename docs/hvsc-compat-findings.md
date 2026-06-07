@@ -1,13 +1,13 @@
 # HVSC Compatibility Implementation Analysis
 
-This document is a working analysis for improving zmk-sid compatibility against
+This document is a working analysis for improving rasterklang compatibility against
 the HVSC smoke-test report produced by `cmd/hvsc-compat`.
 
 Current ordinary-engine snapshot with `Electronic Speech Systems` filtered out:
 
 - Command:
-  `go run ./cmd/hvsc-compat -duration 1s -subtunes all -workers 12 -exclude-type "Electronic Speech Systems" -out /tmp/zmk-sid-full-hvsc-1s-no-ess-after-progress-overrun.tsv ../test_tunes/C64Music`
-- Report: `/tmp/zmk-sid-full-hvsc-1s-no-ess-after-progress-overrun.tsv`
+  `go run ./cmd/hvsc-compat -duration 1s -subtunes all -workers 12 -exclude-type "Electronic Speech Systems" -out /tmp/rasterklang-full-hvsc-1s-no-ess-after-progress-overrun.tsv ../test_tunes/C64Music`
+- Report: `/tmp/rasterklang-full-hvsc-1s-no-ess-after-progress-overrun.tsv`
 - Snapshot time: 2026-04-27
 - Corpus after type filter: 86,484 subtunes
 - Failure rows: 167
@@ -281,9 +281,9 @@ Design recommendation:
   The current smoke covers these classes, including a passing non-returning
   `SYS` launcher.
 - Current validation:
-  - `go run ./cmd/hvsc-compat -duration 50ms -subtunes all -list /tmp/zmk-sid-basic-files.txt ...`
+  - `go run ./cmd/hvsc-compat -duration 50ms -subtunes all -list /tmp/rasterklang-basic-files.txt ...`
     covers 587 BASIC files and 1,388 subtunes with 0 failures.
-  - `go run ./cmd/hvsc-compat -duration 10s -subtunes default -min-rms 0.0005 -list /tmp/zmk-sid-basic-files.txt ...`
+  - `go run ./cmd/hvsc-compat -duration 10s -subtunes default -min-rms 0.0005 -list /tmp/rasterklang-basic-files.txt ...`
     covers 587 default subtunes and leaves 1 silence row.
   - The remaining 10 second silence row is `Beat_Dis_BASIC`.
   - `Randomly_generated_music_BASIC`,
@@ -317,7 +317,7 @@ Remaining BASIC groups:
 
 Drawbacks:
 
-- This pulls zmk-sid toward "small C64 runtime" territory.
+- This pulls rasterklang toward "small C64 runtime" territory.
 - C64 BASIC numeric/string behavior is quirky. A Go-native approximation will
   pass many music programs, but not all BASIC edge cases.
 - Tempo accuracy is a real risk unless the BASIC timing model is validated.

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 func duration(args []string) error {
@@ -21,7 +21,7 @@ func duration(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: zmk-sid duration [options] <file.sid>")
+		return fmt.Errorf("usage: rasterklang duration [options] <file.sid>")
 	}
 	if *all && *subtune != 0 {
 		return fmt.Errorf("-all and -subtune cannot be used together")

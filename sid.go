@@ -2,12 +2,12 @@
 package sid
 
 import (
-	"github.com/dnoegel/zmk-sid/internal/audio"
-	"github.com/dnoegel/zmk-sid/internal/engine"
-	"github.com/dnoegel/zmk-sid/internal/sidfile"
-	"github.com/dnoegel/zmk-sid/internal/songlength"
-	"github.com/dnoegel/zmk-sid/internal/wav"
-	sidprofile "github.com/dnoegel/zmk-sid/profile"
+	"github.com/dnoegel/rasterklang/internal/audio"
+	"github.com/dnoegel/rasterklang/internal/engine"
+	"github.com/dnoegel/rasterklang/internal/sidfile"
+	"github.com/dnoegel/rasterklang/internal/songlength"
+	"github.com/dnoegel/rasterklang/internal/wav"
+	sidprofile "github.com/dnoegel/rasterklang/profile"
 )
 
 type (

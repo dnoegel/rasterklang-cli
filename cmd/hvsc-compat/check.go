@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 func checkFile(job tuneJob, cfg config) (result fileResult) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 func samplesForDuration(duration time.Duration, sampleRate int) int {

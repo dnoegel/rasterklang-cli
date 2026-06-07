@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 
-BIN := zmk-sid
-CMD := ./cmd/zmk-sid
+BIN := rasterklang
+CMD := ./cmd/rasterklang
 DIST := dist
 TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 VERSION ?=
@@ -12,7 +12,7 @@ help:
 	@printf '%s\n' \
 		'Targets:' \
 		'  make test                         Run all tests' \
-		'  make build                        Build local zmk-sid binary' \
+		'  make build                        Build local rasterklang binary' \
 		'  make dist                         Build release archives in dist/' \
 		'  make tag VERSION=v0.1.0           Create an annotated release tag' \
 		'  make push-tag VERSION=v0.1.0      Push a release tag to origin' \

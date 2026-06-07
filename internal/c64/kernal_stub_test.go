@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/dnoegel/zmk-sid/internal/sid"
+	"github.com/dnoegel/rasterklang/internal/sid"
 )
 
 func TestKernalCHROUTStubReturnsToCaller(t *testing.T) {

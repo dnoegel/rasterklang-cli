@@ -7,7 +7,7 @@ import (
 
 func TestParseProfile(t *testing.T) {
 	p, err := Parse([]byte(`{
-		"schemaVersion": "zmk.sid.profile.v1",
+		"schemaVersion": "rasterklang.sid.profile.v1",
 		"name": "test",
 		"base": "balanced",
 		"chipModel": "6581",
@@ -47,7 +47,7 @@ func TestParseProfile(t *testing.T) {
 
 func TestParseRejectsUnknownFields(t *testing.T) {
 	_, err := Parse([]byte(`{
-		"schemaVersion": "zmk.sid.profile.v1",
+		"schemaVersion": "rasterklang.sid.profile.v1",
 		"mixer": {
 			"voiceGain": 0.2,
 			"typo": 1
@@ -70,7 +70,7 @@ func TestBuiltinBalancedProfile(t *testing.T) {
 
 func TestParseRejectsUnsortedCutoffPoints(t *testing.T) {
 	_, err := Parse([]byte(`{
-		"schemaVersion": "zmk.sid.profile.v1",
+		"schemaVersion": "rasterklang.sid.profile.v1",
 		"filter": {
 			"cutoff": {
 				"points": [

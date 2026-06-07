@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 func render(args []string) error {
@@ -22,7 +22,7 @@ func render(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: zmk-sid render [options] <file.sid>")
+		return fmt.Errorf("usage: rasterklang render [options] <file.sid>")
 	}
 	if *duration <= 0 {
 		return fmt.Errorf("duration must be positive")

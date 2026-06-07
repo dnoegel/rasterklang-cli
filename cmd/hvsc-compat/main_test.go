@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	sid "github.com/dnoegel/zmk-sid"
+	sid "github.com/dnoegel/rasterklang"
 )
 
 func TestBucketForError(t *testing.T) {

@@ -4,7 +4,7 @@ This document tracks why the current SID audio path behaves the way it does,
 which parts are based on well-known SID behavior, and which parts are still
 heuristic tuning.
 
-The goal is not to claim reSID-level accuracy. The goal is to keep zmk-sid
+The goal is not to claim reSID-level accuracy. The goal is to keep rasterklang
 honest: changes should explain the audible problem they address, the confidence
 level behind them, and the validation still needed.
 
@@ -192,13 +192,13 @@ Current magic values:
 
 Reference-render comparison:
 
-- A 3 second batch comparison was run over `test_tunes` using zmk-sid versus
+- A 3 second batch comparison was run over `test_tunes` using rasterklang versus
   Debian `sidplayfp` 2.4.0 / `libsidplayfp` 2.4.2 with reSIDfp. `sidplayfp -nf`
   renders were also generated to weight tunes whose reference output is actually
   filter-sensitive.
 - 201 of 202 tunes completed. `Great_Giana_Sisters.sid` was excluded because
   `sidplayfp` did not terminate its 3 second WAV render in this environment.
-- Raw RMS is not a good filter-tuning signal by itself: zmk-sid renders were
+- Raw RMS is not a good filter-tuning signal by itself: rasterklang renders were
   roughly twice as loud as the sidplayfp CLI output in the median case. After
   normalizing band energy by RMS, filter-sensitive tunes showed a clearer color
   bias: too much low/low-mid energy, only slightly too much mid energy, and too
@@ -222,7 +222,7 @@ Synthetic filter sweep harness:
 
 - Added `cmd/filter-sweep` as an offline comparison tool for controlled filter
   stimuli. It generates small PSID v2 files rather than importing any
-  sidplayfp/reSIDfp code, renders the same files through zmk-sid and an
+  sidplayfp/reSIDfp code, renders the same files through rasterklang and an
   installed `sidplayfp` binary, then writes CSV/JSON metrics.
 - The generated stimuli use one routed voice, configurable waveform/frequency,
   fixed model, fixed filter mode, one resonance value, and one cutoff value.
@@ -235,12 +235,12 @@ Synthetic filter sweep harness:
   shape; absolute RMS is still tracked but should not drive filter tuning alone.
 - Added `cmd/filter-sweep-report` to turn a sweep JSON or `latest-summary.json`
   into a self-contained HTML report. The report shows normalized RMS response
-  curves for zmk-sid versus sidplayfp, centroid/spectral/band-distance curves,
+  curves for rasterklang versus sidplayfp, centroid/spectral/band-distance curves,
   and per-mode median band-ratio heatmaps.
 - Added `cmd/filter-sweep -dry-normalize`. This renders a matching unrouted
   dry stimulus and reports filter ratios after removing the dry oscillator,
-  mixer, and output-stage level difference between zmk-sid and sidplayfp.
-  Without this correction the filter sweep mostly says that zmk-sid's direct
+  mixer, and output-stage level difference between rasterklang and sidplayfp.
+  Without this correction the filter sweep mostly says that rasterklang's direct
   oscillator path is louder than sidplayfp's CLI output.
 - The first default run completed 255/255 stimuli:
 
@@ -280,7 +280,7 @@ Synthetic filter sweep harness:
 Real hardware recording comparison:
 
 - Added `cmd/recording-compare` as a validation harness for real C64 recordings.
-  It renders a local SID through zmk-sid, decodes a reference recording through
+  It renders a local SID through rasterklang, decodes a reference recording through
   `ffmpeg` when needed, aligns both streams by a 10 ms RMS envelope
   cross-correlation, optionally writes aligned WAV snippets, and reports JSON
   metrics for RMS, peak, spectral centroid, band share, band ratios, and
@@ -319,7 +319,7 @@ Real hardware recording comparison:
   `MUSICIANS/S/SoedeSoft/Soede_Jeroen`, HVSC49, song length 0:43, with MP3
   recordings for MOS6581R3, MOS6581R4, and CSG8580R5. The MOS6581R3 MP3 is
   about 1.2 MB.
-- First 30 second zmk-sid versus SOASC R3 result:
+- First 30 second rasterklang versus SOASC R3 result:
 
   - alignment lag: -0.060 s, envelope correlation about 0.389
   - RMS ratio: about 0.828 (-1.64 dB)
@@ -406,7 +406,7 @@ Classical conclusion so far:
   cutoff-dependent 6581 mode-response tilt derived from the dry-normalized saw
   curves. The score still combines dry-normalized sweep curves, Airwolf
   peak/max-delta guardrails, and high-correlation SOASC color guardrails. The
-  broader fitting plan now lives in `../zmk-optimize/docs/ml-filter-plan.md`.
+  broader fitting plan now lives in `../rasterklang-optimize/docs/ml-filter-plan.md`.
 
 Noise and curve alignment:
 
@@ -421,7 +421,7 @@ Noise and curve alignment:
   For real SOASC recordings, `air` is now treated as a diagnostic/noise-heavy
   band rather than a direct tuning target.
 - Added `cmd/filter-curve-align`. It reads a dry-normalized sweep JSON or
-  `latest-summary.json`, builds dB transfer curves for zmk-sid and sidplayfp,
+  `latest-summary.json`, builds dB transfer curves for rasterklang and sidplayfp,
   clamps a configurable floor such as `-70 dB` so stop-band/noise tails do not
   dominate, and then fits a simple affine raw-cutoff mapping plus gain offset
   per model/wave/mode/resonance group.
@@ -456,7 +456,7 @@ Noise and curve alignment:
 
 BP/HP response fit:
 
-- Curve points showed the same BP/HP failure shape across resonance: zmk-sid was
+- Curve points showed the same BP/HP failure shape across resonance: rasterklang was
   too loud at low cutoff and too quiet at high cutoff. On the 6581 saw sweep the
   combined BP/HP dry-transfer RMSE was about 3.82 dB.
 - An offline fit over the existing sweep found that a simple linear gain
@@ -695,7 +695,7 @@ Useful source references:
 
 Problem:
 
-- `zmk-learn` and future WASM tools need to explain what the engine is doing
+- `rasterklang-learn` and future WASM tools need to explain what the engine is doing
   without importing `internal/` packages or coupling the emulator to browser UI
   concepts.
 - Unbounded traces would be unsafe for browser and teaching UIs.
@@ -716,7 +716,7 @@ Changes:
 
 Expected effect:
 
-- `zmk-learn` can drive frame-by-frame and instruction-oriented views through
+- `rasterklang-learn` can drive frame-by-frame and instruction-oriented views through
   the root Go package, including from WASM.
 - Normal playback stays on `Stream`; when tracing is disabled, hooks are nil and
   trace buffers are not allocated.
@@ -736,7 +736,7 @@ Remaining uncertainty:
 
 Problem:
 
-- `zmk-learn` Insight needs listener-facing controls so users can isolate which
+- `rasterklang-learn` Insight needs listener-facing controls so users can isolate which
   SID voices and filter routing shape the sound they are hearing.
 - These controls must not rewrite the tune's SID registers or alter CPU/player
   execution, because the register heatmap and trace should continue to show the
@@ -777,9 +777,9 @@ Problem:
 
 Changes:
 
-- Added a public `EstimateDuration` API and a `zmk-sid duration` command.
+- Added a public `EstimateDuration` API and a `rasterklang duration` command.
 - Added modern HVSC `Songlengths.md5` parsing, full-content SID MD5 lookup, and
-  a `zmk-sid duration-validate` command.
+  a `rasterklang duration-validate` command.
 - The estimator renders at a low sample rate, groups output into time windows,
   and tracks SID register state plus coarse audio activity.
 - Repeated active windows become loop candidates; sustained silence after
@@ -1218,9 +1218,9 @@ Changes:
   adds real 6502 cycles from the helper routine after the BASIC-side call
   overhead.
 - The default BASIC timing weights have been retuned from the
-  `zmk-vice-sid-timing` microbench/songbench model generated on 2026-04-28
-  (`/tmp/zmk-vice-expanded-large-20260428-vPy9xj`, integrated with the earlier
-  80-song fit in `/tmp/zmk-vice-large-box-20260428-bg.ziATsr`). The expanded
+  `rasterklang-vice-timing` microbench/songbench model generated on 2026-04-28
+  (`/tmp/rasterklang-vice-expanded-large-20260428-vPy9xj`, integrated with the earlier
+  80-song fit in `/tmp/rasterklang-vice-large-box-20260428-bg.ziATsr`). The expanded
   run used 28 synthetic BASIC microbenches as VICE priors, then blended them
   with the ratio-gated 80-song BASIC SID fit (`51` usable songs, `21720` fit
   rows, `statement-feature-cost` `R2=0.9745`). The approximation keeps `POKE`
@@ -1345,16 +1345,16 @@ Current checks include:
 
 ```sh
 go test ./...
-go run ./cmd/zmk-sid analyze -duration 5s ../test_tunes/C64Music/MUSICIANS/F/Freqvibez/Cordis_Monophonous.sid
-go run ./cmd/zmk-sid analyze -duration 10s ../test_tunes/C64Music/MUSICIANS/H/Honey/8_Bit-Maerchenland_V2.sid
-go run ./cmd/zmk-sid analyze -duration 10s ../test_tunes/C64Music/MUSICIANS/H/Honey/Alles_Luege.sid
-go run ./cmd/zmk-sid analyze -duration 8s ../test_tunes/C64Music/MUSICIANS/S/SoedeSoft/Soede_Jeroen/Airwolf_Title.sid
-go run ./cmd/zmk-sid duration -budget 3s ../test_tunes/C64Music/MUSICIANS/H/Honey/Alles_Luege.sid
-go run ./cmd/zmk-sid duration-validate -songlengths ../test_tunes/C64Music/DOCUMENTS/Songlengths.md5 ../test_tunes/C64Music/MUSICIANS/H/Hubbard_Rob
-go run ./cmd/hvsc-compat -duration 1s -subtunes all -workers 12 -out /tmp/zmk-sid-full-hvsc-1s-after-basic-irq.tsv ../test_tunes/C64Music
-go run ./cmd/hvsc-compat -duration 1s -subtunes all -workers 12 -exclude-type "Electronic Speech Systems" -out /tmp/zmk-sid-full-hvsc-1s-no-ess-after-topfixes.tsv ../test_tunes/C64Music
-go run ./cmd/hvsc-compat -duration 1s -subtunes all -workers 1 -list /tmp/zmk-sid-basic-recheck.txt -out /tmp/zmk-sid-basic-recheck.tsv ../test_tunes/C64Music
-(cd ../zmk-optimize && go run ./cmd/recording-compare -sid ../test_tunes/C64Music/MUSICIANS/S/SoedeSoft/Soede_Jeroen/Airwolf_Title.sid -ref ../test-results/recording-compare/soasc-airwolf-title/Airwolf_Title_T001.sid_MOS6581R3.mp3 -duration 30s -max-lag 8s -o ../test-results/recording-compare/soasc-airwolf-title/airwolf-title-r3-30s.json)
+go run ./cmd/rasterklang analyze -duration 5s ../test_tunes/C64Music/MUSICIANS/F/Freqvibez/Cordis_Monophonous.sid
+go run ./cmd/rasterklang analyze -duration 10s ../test_tunes/C64Music/MUSICIANS/H/Honey/8_Bit-Maerchenland_V2.sid
+go run ./cmd/rasterklang analyze -duration 10s ../test_tunes/C64Music/MUSICIANS/H/Honey/Alles_Luege.sid
+go run ./cmd/rasterklang analyze -duration 8s ../test_tunes/C64Music/MUSICIANS/S/SoedeSoft/Soede_Jeroen/Airwolf_Title.sid
+go run ./cmd/rasterklang duration -budget 3s ../test_tunes/C64Music/MUSICIANS/H/Honey/Alles_Luege.sid
+go run ./cmd/rasterklang duration-validate -songlengths ../test_tunes/C64Music/DOCUMENTS/Songlengths.md5 ../test_tunes/C64Music/MUSICIANS/H/Hubbard_Rob
+go run ./cmd/hvsc-compat -duration 1s -subtunes all -workers 12 -out /tmp/rasterklang-full-hvsc-1s-after-basic-irq.tsv ../test_tunes/C64Music
+go run ./cmd/hvsc-compat -duration 1s -subtunes all -workers 12 -exclude-type "Electronic Speech Systems" -out /tmp/rasterklang-full-hvsc-1s-no-ess-after-topfixes.tsv ../test_tunes/C64Music
+go run ./cmd/hvsc-compat -duration 1s -subtunes all -workers 1 -list /tmp/rasterklang-basic-recheck.txt -out /tmp/rasterklang-basic-recheck.tsv ../test_tunes/C64Music
+(cd ../rasterklang-optimize && go run ./cmd/recording-compare -sid ../test_tunes/C64Music/MUSICIANS/S/SoedeSoft/Soede_Jeroen/Airwolf_Title.sid -ref ../test-results/recording-compare/soasc-airwolf-title/Airwolf_Title_T001.sid_MOS6581R3.mp3 -duration 30s -max-lag 8s -o ../test-results/recording-compare/soasc-airwolf-title/airwolf-title-r3-30s.json)
 ```
 
 Useful current problem tunes:
@@ -1376,27 +1376,27 @@ catch regressions, but listening tests and reference renders are still required.
 - The current built-in behavior is exposed as the default `balanced` profile.
 - `RenderOptions`, `StreamOptions`, and `DebugOptions` can now carry a
   `SoundProfile`.
-- `zmk-sid play`, `zmk-sid render`, and `zmk-sid analyze` accept
+- `rasterklang play`, `rasterklang render`, and `rasterklang analyze` accept
   `-profile <name-or-json>`.
 - Supported profile areas currently include mixer gain/leakage/drive, waveform
   color such as 6581 triangle saw bleed, voice DAC low-pass, cutoff mapping,
   filter input/drive/damping/mode response, output stage, output gain, and
   volume DAC level.
 - `filter.cutoff.points` can now optionally provide sorted raw-register/Hz
-  points. When at least two points are present, zmk-sid linearly interpolates
+  points. When at least two points are present, rasterklang linearly interpolates
   those points instead of using the polynomial cutoff
   `baseHz + rangeHz * dac(raw)^exponent` curve. This is intentionally explicit
   and profile-driven; the built-in `balanced` defaults still use the polynomial
   mapping.
 - This is a structural change, not a new retune. The default constants were
-  moved behind a resolved `balanced` profile so `zmk-optimize` can emit
+  moved behind a resolved `balanced` profile so `rasterklang-optimize` can emit
   candidate profiles without requiring immediate Go-code edits.
 
 ## 6581 Balanced Profile Promotion
 
 2026-04-27:
 
-- Promoted the best no-prune `zmk-optimize global-optimize` result into the
+- Promoted the best no-prune `rasterklang-optimize global-optimize` result into the
   built-in 6581 `balanced` defaults. The source candidate was
   `test-results/optimize/global-cma-filterv2-noprune-env-002/profiles/best-profile.json`,
   generated by the filter-focused v2 CMA pipeline with all candidates fully
@@ -1432,7 +1432,7 @@ Promotion uncertainty:
   weights. Future work should keep a holdout corpus, compare additional
   problem tunes, and eventually validate against measured or trusted hardware
   captures before calling this a hardware-accurate 6581 profile.
-- `zmk-optimize` now freezes this promoted default as
+- `rasterklang-optimize` now freezes this promoted default as
   `balanced-6581-filterv2` and provides `compare-profile` as the next promotion
   gate: current vs candidate, synthetic and real metrics, Airwolf/problem-tune
   rows, guardrails, score-component deltas, and optional holdout must agree
@@ -1451,27 +1451,27 @@ Profile-format uncertainty:
 - Bundled non-balanced profiles should only be added after Airwolf-style
   peak/max-delta guardrails and sweep comparisons pass.
 
-## zmk-optimize Migration
+## rasterklang-optimize Migration
 
 2026-04-27:
 
-- Created `../zmk-optimize` as the new home for analysis and optimization
+- Created `../rasterklang-optimize` as the new home for analysis and optimization
   tooling.
 - Migrated the current standalone analysis commands there:
   `filter-sweep`, `filter-sweep-report`, `filter-curve-align`,
   `filter-response-fit`, `recording-compare`, `soasc-corpus`, and
   `waveform-harmonics`.
-- Added an initial `zmk-optimize profile validate` command.
-- Removed those analysis command directories from `zmk-sid`; run them from
-  `../zmk-optimize/cmd/...` now. Historical notes below may still mention their
+- Added an initial `rasterklang-optimize profile validate` command.
+- Removed those analysis command directories from `rasterklang`; run them from
+  `../rasterklang-optimize/cmd/...` now. Historical notes below may still mention their
   original `cmd/...` paths.
 
 ## BASIC Runner Completeness
 
 2026-04-27:
 
-- Completed the helper pieces for the in-repo BASIC runner so `zmk-sid` builds
-  again during `zmk-optimize` recording comparisons.
+- Completed the helper pieces for the in-repo BASIC runner so `rasterklang` builds
+  again during `rasterklang-optimize` recording comparisons.
 - The immediate blocker appeared during the `LP+HP` pairwise filter run: the
   renderer failed to compile `internal/basic` before it could compare candidate
   audio against SOASC recordings.
@@ -1480,7 +1480,7 @@ Profile-format uncertainty:
   entry/skip helpers. These are established BASIC interpreter semantics in
   broad shape, but the implementation remains an approximation aimed at common
   SID tune launchers rather than a complete C64 BASIC V2 clone.
-- A follow-up `zmk-optimize` hybrid curve smoke exercised this path from the
+- A follow-up `rasterklang-optimize` hybrid curve smoke exercised this path from the
   external optimizer module. The helper set now includes `looksLikeBasicLine`
   for bad BASIC linked-list pointers with valid physical next lines, and
   `statementEnd` so `DEF FN` captures only its expression before the next
@@ -1502,7 +1502,7 @@ Profile-format uncertainty:
 
 ### Stream fast-forward for playback start offsets
 
-- `zmk-sid play -start` previously skipped by reading PCM from the stream into a
+- `rasterklang play -start` previously skipped by reading PCM from the stream into a
   scratch buffer and discarding it. That was correct, but it paid the normal PCM
   output cost for audio that would never be heard.
 - `Stream` and `DebugStream` now expose `SkipSamples`, and the playback helper
@@ -1539,16 +1539,16 @@ Profile-format uncertainty:
 
    - `accurate`: fewer playback-polish ramps, stricter SID semantics, and either
      reference-engine comparison or a future reSID-style filter model.
-   - `6581r3-experimental`: candidate generated by `zmk-optimize` from sweeps
+   - `6581r3-experimental`: candidate generated by `rasterklang-optimize` from sweeps
      and guarded by Airwolf Title.
    - `8580r5-experimental`: same idea for 8580-focused material.
    - `soft`: stronger de-clicking for casual playback.
 
 2. Extend the reference comparison harness.
 
-   `../zmk-optimize/cmd/filter-sweep`,
-   `../zmk-optimize/cmd/filter-sweep-report`, and
-   `../zmk-optimize/cmd/recording-compare` now cover controlled synthetic
+   `../rasterklang-optimize/cmd/filter-sweep`,
+   `../rasterklang-optimize/cmd/filter-sweep-report`, and
+   `../rasterklang-optimize/cmd/recording-compare` now cover controlled synthetic
    stimuli, sidplayfp/reSIDfp comparisons, and real-recording validation. Use
    those harnesses before changing more filter constants:
 

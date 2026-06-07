@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dnoegel/zmk-sid/internal/sidfile"
+	"github.com/dnoegel/rasterklang/internal/sidfile"
 )
 
 func TestEstimateDurationDetectsSteadyLoop(t *testing.T) {
@@ -129,7 +129,7 @@ func syntheticHeader(title string, load uint16, init uint16, play uint16, size i
 	binary.BigEndian.PutUint16(data[14:16], 1)
 	binary.BigEndian.PutUint16(data[16:18], 1)
 	copy(data[0x16:0x36], title)
-	copy(data[0x36:0x56], "zmk-sid")
+	copy(data[0x36:0x56], "rasterklang")
 	copy(data[0x56:0x76], "2026")
 	binary.BigEndian.PutUint16(data[0x76:0x78], 0x0014)
 	return data

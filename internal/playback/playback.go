@@ -7,7 +7,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/dnoegel/zmk-sid/internal/audio"
+	"github.com/dnoegel/rasterklang/internal/audio"
 )
 
 type SampleSource interface {

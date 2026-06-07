@@ -1,4 +1,4 @@
-//go:build !darwin && !(linux && zmk_alsa)
+//go:build !darwin && !(linux && rasterklang_alsa)
 
 package playback
 
