@@ -14,6 +14,8 @@ created. The project follows semantic version-style tags such as `v0.1.0`.
   release documentation, and tests.
 - Added release documentation for checksum verification, unsigned binary status,
   package-manager status, and HVSC/tune licensing.
+- Replaced remaining public "POC" support wording with release-grade
+  Rasterklang support labels and errors.
 
 ## v0.1.0
 

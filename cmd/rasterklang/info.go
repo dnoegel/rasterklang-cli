@@ -37,10 +37,10 @@ func info(args []string) error {
 	fmt.Printf("SID model:    %s\n", tune.SIDModel)
 	fmt.Printf("Flags:        $%04X\n", tune.Flags)
 	fmt.Printf("Payload:      %d bytes\n", len(tune.Payload))
-	if err := tune.ValidateForPOC(); err != nil {
-		fmt.Printf("POC support:  no (%s)\n", err)
+	if err := tune.ValidateForPlayback(); err != nil {
+		fmt.Printf("Rasterklang support:  no (%s)\n", err)
 	} else {
-		fmt.Printf("POC support:  yes\n")
+		fmt.Printf("Rasterklang support:  yes\n")
 	}
 	return nil
 }

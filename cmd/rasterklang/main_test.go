@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -64,4 +68,75 @@ func TestUsageIsReleaseQuality(t *testing.T) {
 	if !strings.Contains(got, "rasterklang is a pure-Go SID engine and CLI.") {
 		t.Fatalf("usage output missing release-quality summary: %q", got)
 	}
+}
+
+func TestInfoOutputUsesReleaseQualitySupportLabel(t *testing.T) {
+	path := writeInfoTestSID(t)
+
+	var infoErr error
+	got := captureStdout(t, func() {
+		infoErr = info([]string{path})
+	})
+
+	if infoErr != nil {
+		t.Fatal(infoErr)
+	}
+	if strings.Contains(strings.ToLower(got), "poc") {
+		t.Fatalf("info output should not describe support as POC: %q", got)
+	}
+	if !strings.Contains(got, "Rasterklang support:  yes") {
+		t.Fatalf("info output missing release-quality support label: %q", got)
+	}
+}
+
+func writeInfoTestSID(t *testing.T) string {
+	t.Helper()
+
+	data := make([]byte, 0x7c+4)
+	copy(data[0:4], "PSID")
+	binary.BigEndian.PutUint16(data[4:6], 2)
+	binary.BigEndian.PutUint16(data[6:8], 0x7c)
+	binary.BigEndian.PutUint16(data[8:10], 0x1000)
+	binary.BigEndian.PutUint16(data[10:12], 0x1000)
+	binary.BigEndian.PutUint16(data[12:14], 0x1003)
+	binary.BigEndian.PutUint16(data[14:16], 1)
+	binary.BigEndian.PutUint16(data[16:18], 1)
+	copy(data[0x16:0x36], "Release Tune")
+	copy(data[0x36:0x56], "Rasterklang")
+	copy(data[0x56:0x76], "2026")
+	copy(data[0x7c:], []byte{0xea, 0xea, 0x60, 0x60})
+
+	path := filepath.Join(t.TempDir(), "release.sid")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+	defer func() {
+		os.Stdout = oldStdout
+	}()
+
+	fn()
+
+	if err := writePipe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(readPipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := readPipe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }

@@ -117,7 +117,7 @@ func newMachineState(tune *sidfile.Tune, opts machineOptions) (*machineState, er
 	if tune == nil {
 		return nil, fmt.Errorf("engine: nil tune")
 	}
-	if err := tune.ValidateForPOC(); err != nil {
+	if err := tune.ValidateForPlayback(); err != nil {
 		return nil, newFailureError(FailurePhaseValidate, err, FailureContext{})
 	}
 	if opts.Subtune == 0 {

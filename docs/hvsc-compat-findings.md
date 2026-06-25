@@ -79,7 +79,7 @@ Done:
   startup/full-program issues (`no_irq_vector`, `init_cycle_limit`) and KERNAL
   ROM entry around `$EA81`.
 - BASIC RSID files now have a separate clean-room BASIC interpreter path instead
-  of being rejected by `ValidateForPOC`. The current BASIC smoke covers 587 HVSC
+  of being rejected by `ValidateForPlayback`. The current BASIC smoke covers 587 HVSC
   BASIC files and 1,388 subtunes with zero start/render failures. A stricter
   10 second default-subtune silence check leaves 1 file below the RMS floor.
 - BASIC launchers that finish after consuming most of a frame now defer their

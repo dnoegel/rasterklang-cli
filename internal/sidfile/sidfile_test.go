@@ -2,6 +2,7 @@ package sidfile
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 )
 
@@ -174,6 +175,27 @@ func TestTuneTypesDetectElectronicSpeechSystemsMetadata(t *testing.T) {
 	assertHasType(t, tune, TuneTypeSpeechExtension)
 	if tune.HasType(TuneTypeBASIC) {
 		t.Fatalf("unexpected BASIC type in %v", tune.Types())
+	}
+}
+
+func TestValidateForPlaybackRejectsMUSWithReleaseQualityError(t *testing.T) {
+	tune := &Tune{
+		MUS:           true,
+		EffectiveLoad: 0x1000,
+		InitAddress:   0x1000,
+		PlayAddress:   0x1003,
+	}
+
+	err := tune.ValidateForPlayback()
+
+	if err == nil {
+		t.Fatal("ValidateForPlayback returned nil for MUS tune")
+	}
+	if got := err.Error(); strings.Contains(strings.ToLower(got), "poc") {
+		t.Fatalf("support error should not describe Rasterklang as a POC: %q", got)
+	}
+	if got := err.Error(); got != "Compute!'s MUS files are not supported by Rasterklang" {
+		t.Fatalf("support error = %q", got)
 	}
 }
 

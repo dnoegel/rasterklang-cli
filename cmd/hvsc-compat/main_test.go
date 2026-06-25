@@ -20,7 +20,7 @@ func TestBucketForError(t *testing.T) {
 		{
 			name: "basic rsid",
 			tune: basicTune,
-			err:  errors.New("BASIC RSID tunes are not supported by the POC engine yet"),
+			err:  errors.New("BASIC RSID tunes are not supported by Rasterklang yet"),
 			want: "basic_rsid",
 		},
 		{
@@ -106,7 +106,7 @@ func TestPhaseForError(t *testing.T) {
 	}{
 		{errors.New("load: open tune.sid: no such file"), "load"},
 		{errors.New("engine: init failed: c64: BRK at $2057"), "init"},
-		{errors.New("BASIC RSID tunes are not supported by the POC engine yet"), "init"},
+		{errors.New("BASIC RSID tunes are not supported by Rasterklang yet"), "init"},
 		{errors.New("engine: no IRQ vector installed by init routine"), "irq"},
 		{errors.New("engine: IRQ play failed near sample 0: c64: BRK at $0000"), "irq"},
 		{errors.New("engine: play failed near sample 0: c64: BRK at $0000"), "play"},
@@ -186,7 +186,7 @@ func TestTuneFailureIncludesMetadata(t *testing.T) {
 		Payload:       []byte{1, 2, 3, 4},
 	}
 
-	failure := tuneFailure("fixture.sid", tune, 2, errors.New("BASIC RSID tunes are not supported by the POC engine yet"), 44100)
+	failure := tuneFailure("fixture.sid", tune, 2, errors.New("BASIC RSID tunes are not supported by Rasterklang yet"), 44100)
 	if failure.Bucket != "basic_rsid" {
 		t.Fatalf("bucket = %q, want basic_rsid", failure.Bucket)
 	}
