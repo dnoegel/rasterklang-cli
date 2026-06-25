@@ -5,7 +5,7 @@ package basic
 import (
 	"fmt"
 
-	"github.com/dnoegel/rasterklang/internal/c64"
+	"github.com/dnoegel/rasterklang-cli/internal/c64"
 )
 
 type Program struct {

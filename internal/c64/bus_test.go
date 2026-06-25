@@ -3,7 +3,7 @@ package c64
 import (
 	"testing"
 
-	"github.com/dnoegel/rasterklang/internal/sid"
+	"github.com/dnoegel/rasterklang-cli/internal/sid"
 )
 
 func TestDelayedSIDWritesFlushExplicitly(t *testing.T) {

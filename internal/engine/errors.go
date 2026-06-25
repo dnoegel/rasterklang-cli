@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/dnoegel/rasterklang/internal/c64"
+	"github.com/dnoegel/rasterklang-cli/internal/c64"
 )
 
 type FailurePhase string

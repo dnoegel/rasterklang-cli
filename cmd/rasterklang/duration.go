@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	sid "github.com/dnoegel/rasterklang"
+	sid "github.com/dnoegel/rasterklang-cli"
 )
 
 func duration(args []string) error {

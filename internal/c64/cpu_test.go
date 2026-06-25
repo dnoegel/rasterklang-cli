@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dnoegel/rasterklang/internal/sid"
+	"github.com/dnoegel/rasterklang-cli/internal/sid"
 )
 
 func TestRunSubroutineStoresResult(t *testing.T) {

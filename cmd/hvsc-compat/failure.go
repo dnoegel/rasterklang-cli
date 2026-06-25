@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	sid "github.com/dnoegel/rasterklang"
+	sid "github.com/dnoegel/rasterklang-cli"
 )
 
 func tuneFailure(path string, tune *sid.Tune, subtune int, err error, rate int) failure {

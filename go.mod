@@ -1,4 +1,4 @@
-module github.com/dnoegel/rasterklang
+module github.com/dnoegel/rasterklang-cli
 
 go 1.26
 

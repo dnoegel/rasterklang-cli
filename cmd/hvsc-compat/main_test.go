@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	sid "github.com/dnoegel/rasterklang"
+	sid "github.com/dnoegel/rasterklang-cli"
 )
 
 func TestBucketForError(t *testing.T) {

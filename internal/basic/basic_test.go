@@ -3,8 +3,8 @@ package basic
 import (
 	"testing"
 
-	"github.com/dnoegel/rasterklang/internal/c64"
-	"github.com/dnoegel/rasterklang/internal/sid"
+	"github.com/dnoegel/rasterklang-cli/internal/c64"
+	"github.com/dnoegel/rasterklang-cli/internal/sid"
 )
 
 func TestRunnerExecutesDataReadForPokeLoop(t *testing.T) {

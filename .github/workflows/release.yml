@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -23,21 +25,30 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
       - name: Run tests
-        run: go test ./...
+        run: make check
+
+      - name: Run race detector
+        run: make race
 
       - name: Build release archives
-        run: make dist
+        env:
+          TAG: ${{ github.ref_name }}
+        run: make dist VERSION="${TAG}"
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          PACKAGE_MANIFESTS="dist/package-manifests/homebrew/rasterklang.rb dist/package-manifests/scoop/rasterklang.json"
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" dist/*.tar.gz dist/*.sha256 --clobber
+            gh release upload "${TAG}" dist/*.tar.gz dist/*.sha256 ${PACKAGE_MANIFESTS} --clobber
           else
-            gh release create "${TAG}" dist/*.tar.gz dist/*.sha256 \
+            gh release create "${TAG}" dist/*.tar.gz dist/*.sha256 ${PACKAGE_MANIFESTS} \
               --title "${TAG}" \
               --notes "rasterklang ${TAG}"
           fi

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	sid "github.com/dnoegel/rasterklang"
+	sid "github.com/dnoegel/rasterklang-cli"
 )
 
 func info(args []string) error {

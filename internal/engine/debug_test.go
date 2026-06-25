@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/dnoegel/rasterklang/internal/sidfile"
+	"github.com/dnoegel/rasterklang-cli/internal/sidfile"
 )
 
 func TestDebugStreamEmitsFrameTrace(t *testing.T) {

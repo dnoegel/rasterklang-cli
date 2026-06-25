@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	sidprofile "github.com/dnoegel/rasterklang/profile"
+	sidprofile "github.com/dnoegel/rasterklang-cli/profile"
 )
 
 func TestSawFrequencyIsInTune(t *testing.T) {

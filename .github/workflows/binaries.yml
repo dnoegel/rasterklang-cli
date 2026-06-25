@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -23,8 +25,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
       - name: Run tests
-        run: go test ./...
+        run: make check
+
+      - name: Run race detector
+        run: make race
 
   build:
     name: Build ${{ matrix.artifact }}
@@ -37,19 +45,33 @@ jobs:
           - goos: linux
             goarch: amd64
             artifact: rasterklang-linux-amd64
+            binary: rasterklang-linux-amd64
           - goos: linux
             goarch: arm64
             artifact: rasterklang-linux-arm64
+            binary: rasterklang-linux-arm64
           - goos: darwin
             goarch: amd64
             artifact: rasterklang-macos-amd64
+            binary: rasterklang-macos-amd64
           - goos: darwin
             goarch: arm64
             artifact: rasterklang-macos-arm64
+            binary: rasterklang-macos-arm64
+          - goos: windows
+            goarch: amd64
+            artifact: rasterklang-windows-amd64
+            binary: rasterklang-windows-amd64.exe
+          - goos: windows
+            goarch: arm64
+            artifact: rasterklang-windows-arm64
+            binary: rasterklang-windows-arm64.exe
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -63,11 +85,16 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
           ARTIFACT: ${{ matrix.artifact }}
+          BINARY: ${{ matrix.binary }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o "dist/${ARTIFACT}" ./cmd/rasterklang
-          chmod +x "dist/${ARTIFACT}"
-          tar -C dist -czf "dist/${ARTIFACT}.tar.gz" "${ARTIFACT}"
+          BUILD_VERSION="$(git describe --tags --dirty --always 2>/dev/null || echo dev)"
+          COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-s -w -X main.version=${BUILD_VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}"
+          go build -trimpath -ldflags="${LDFLAGS}" -o "dist/${BINARY}" ./cmd/rasterklang
+          chmod +x "dist/${BINARY}"
+          tar -C dist -czf "dist/${ARTIFACT}.tar.gz" "${BINARY}"
           (cd dist && sha256sum "${ARTIFACT}.tar.gz" > "${ARTIFACT}.tar.gz.sha256")
 
       - name: Upload binary artifact

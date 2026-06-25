@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dnoegel/rasterklang/internal/audio"
-	"github.com/dnoegel/rasterklang/internal/sidfile"
+	"github.com/dnoegel/rasterklang-cli/internal/audio"
+	"github.com/dnoegel/rasterklang-cli/internal/sidfile"
 )
 
 func TestAirwolfTitleFilterDoesNotRingOutOfControl(t *testing.T) {

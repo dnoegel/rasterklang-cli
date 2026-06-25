@@ -5,7 +5,7 @@ package sid
 import (
 	"fmt"
 
-	sidprofile "github.com/dnoegel/rasterklang/profile"
+	sidprofile "github.com/dnoegel/rasterklang-cli/profile"
 )
 
 type mixerProfile struct {

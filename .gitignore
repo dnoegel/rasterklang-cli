@@ -4,6 +4,7 @@
 .devcontainer/.local/
 aib.yml
 dist/
+/rasterklang
 hvsc-compat-failures.tsv
 docs/labeling-feasibility.md
 docs/superpowers/

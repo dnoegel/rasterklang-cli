@@ -2,12 +2,12 @@
 package sid
 
 import (
-	"github.com/dnoegel/rasterklang/internal/audio"
-	"github.com/dnoegel/rasterklang/internal/engine"
-	"github.com/dnoegel/rasterklang/internal/sidfile"
-	"github.com/dnoegel/rasterklang/internal/songlength"
-	"github.com/dnoegel/rasterklang/internal/wav"
-	sidprofile "github.com/dnoegel/rasterklang/profile"
+	"github.com/dnoegel/rasterklang-cli/internal/audio"
+	"github.com/dnoegel/rasterklang-cli/internal/engine"
+	"github.com/dnoegel/rasterklang-cli/internal/sidfile"
+	"github.com/dnoegel/rasterklang-cli/internal/songlength"
+	"github.com/dnoegel/rasterklang-cli/internal/wav"
+	sidprofile "github.com/dnoegel/rasterklang-cli/profile"
 )
 
 type (

@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	sid "github.com/dnoegel/rasterklang"
-	"github.com/dnoegel/rasterklang/internal/playback"
+	sid "github.com/dnoegel/rasterklang-cli"
+	"github.com/dnoegel/rasterklang-cli/internal/playback"
 )
 
 func play(args []string) error {

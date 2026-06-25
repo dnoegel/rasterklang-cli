@@ -1,5 +1,8 @@
 # rasterklang
 
+[![Build binaries](https://github.com/dnoegel/rasterklang-cli/actions/workflows/binaries.yml/badge.svg)](https://github.com/dnoegel/rasterklang-cli/actions/workflows/binaries.yml)
+[![Release](https://github.com/dnoegel/rasterklang-cli/actions/workflows/release.yml/badge.svg)](https://github.com/dnoegel/rasterklang-cli/actions/workflows/release.yml)
+
 Pure-Go SID engine and CLI for PSID/RSID tunes.
 
 This is a from-scratch implementation, not a libsidplayfp wrapper. The project
@@ -17,29 +20,115 @@ currently provides:
 - ADSR, D418 sample, OSC3, ENV3, model-aware multimode filter, and output filtering
 - offline WAV rendering and pull-based sample streaming for apps
 
-## CLI
+## Installation
 
 Download the latest release for your platform from
-<https://github.com/dnoegel/rasterklang/releases/latest>:
+<https://github.com/dnoegel/rasterklang-cli/releases/latest>:
 
 - `rasterklang-linux-amd64`
 - `rasterklang-linux-arm64`
 - `rasterklang-macos-amd64`
 - `rasterklang-macos-arm64`
+- `rasterklang-windows-amd64`
+- `rasterklang-windows-arm64`
 
 Each release asset includes a `.tar.gz` archive and a `.sha256` checksum. Unpack
 the archive and put the binary somewhere on your `PATH`:
 
 ```sh
 tar -xzf rasterklang-linux-amd64.tar.gz
+./rasterklang-linux-amd64 --version
 ./rasterklang-linux-amd64 play path/to/tune.sid
 ```
+
+### Verify checksums
+
+Download the matching `.sha256` file next to the archive and verify it before
+running the binary:
+
+```sh
+sha256sum -c rasterklang-linux-amd64.tar.gz.sha256
+```
+
+On macOS:
+
+```sh
+shasum -a 256 -c rasterklang-macos-arm64.tar.gz.sha256
+```
+
+### Signing status
+
+Current release archives are unsigned. Treat the published `.sha256` files as an
+integrity check, not as an authenticity or publisher-identity guarantee. Binary
+signing, SLSA provenance, and package-manager attestations are deferred until the
+first public release process is finalized.
+
+### Release provenance
+
+Each CLI archive includes `RELEASE_PROVENANCE.json`. It records the release
+version, source commit, build date, source repository, target OS/architecture,
+archive name, dirty-source flag, and available GitHub Actions run context.
+
+This provenance file is a machine-readable build record, not a cryptographic
+attestation. Use it together with the `.sha256` file and the GitHub Release tag;
+signed attestations remain deferred.
+
+### Package managers
+
+Package managers are not published yet. Release builds now generate draft
+package metadata under `dist/package-manifests/`:
+
+- `homebrew/rasterklang.rb` for a future Homebrew tap
+- `scoop/rasterklang.json` for the first Windows package path
+
+Generate those files from checked release archives and checksums with:
+
+```sh
+make dist VERSION=v0.1.0
+make package-manifests VERSION=v0.1.0
+```
+
+The generated Homebrew formula and Scoop manifest are uploaded to the GitHub
+Release as reviewable package-channel inputs, but they do not mean a public tap
+or bucket has already been published. Scoop is the first Windows package path
+because the current Windows artifacts are archive-based CLI binaries.
+`winget` is deferred until the release publishes a winget-suitable portable
+`.exe`/`.zip` or installer artifact. Until a Homebrew tap, Scoop bucket, and
+Linux package path are published, install Rasterklang from the GitHub release
+archives or with `go install`.
+
+The manual Package Channels workflow consumes those release assets after a tag
+is published:
+
+```sh
+gh workflow run package-channels.yml \
+  --repo dnoegel/rasterklang-cli \
+  -f release_tag=v0.1.0 \
+  -f dry_run=true
+```
+
+The workflow downloads `dist/package-manifests/homebrew/rasterklang.rb` and
+`dist/package-manifests/scoop/rasterklang.json` from the GitHub Release. In
+dry-run mode it validates the formula/manifest only. With
+`PACKAGE_CHANNEL_TOKEN`, `publish_homebrew=true`, and/or `publish_scoop=true`,
+it opens package-channel pull requests against
+`dnoegel/rasterklang-homebrew-tap` and `dnoegel/rasterklang-scoop-bucket`.
+
+Rasterklang does not bundle HVSC, C64 ROM images, or third-party SID files. Use
+your own legally obtained `.sid` collection with the CLI.
+
+Windows archives contain `.exe` binaries, for example
+`rasterklang-windows-amd64.exe`.
+
+### Go install
 
 If you have Go installed, you can also install the CLI from the module:
 
 ```sh
-go install github.com/dnoegel/rasterklang/cmd/rasterklang@latest
+go install github.com/dnoegel/rasterklang-cli/cmd/rasterklang@latest
 ```
+
+### Development checkout
 
 For development from a checkout:
 
@@ -52,12 +141,14 @@ go run ./cmd/rasterklang render -duration 30s -o tune.wav path/to/tune.sid
 go run ./cmd/rasterklang analyze -duration 30s path/to/tune.sid
 ```
 
+## CLI
+
 ## Releases
 
 Create releases from a clean `main` checkout:
 
 ```sh
-make test
+make check
 make tag VERSION=v0.1.0
 make push-tag VERSION=v0.1.0
 ```
@@ -68,8 +159,44 @@ Or create and push the tag in one step:
 make release VERSION=v0.1.0
 ```
 
-Pushing a `v*` tag triggers the release workflow, which builds Linux/macOS
-archives and publishes them to the matching GitHub Release.
+### Release quality gate
+
+`make check` is the local release gate. It verifies formatting, release
+documentation, generated license-report and package-manifest contracts,
+`staticcheck` when installed, `go vet ./...`, and `go test ./...`. GitHub
+Actions installs `staticcheck` before running `make check`, so CI and tag
+release builds treat static analysis as required. CI and tag-release jobs also
+run `make race`, which executes `go test -race ./...` before any release archive
+is published.
+
+Pushing a `v*` tag triggers the release workflow, which builds Linux, macOS,
+and Windows archives with embedded version metadata and publishes them to the
+matching GitHub Release. The same release job also generates draft
+`dist/package-manifests/homebrew/rasterklang.rb` and
+`dist/package-manifests/scoop/rasterklang.json` files from the release checksums
+and uploads them as package-channel inputs. The Scoop manifest is the checked
+Windows package draft for the first release; winget is deferred until the
+Windows artifact shape is changed for that channel.
+
+### Release Identity Preflight
+
+```sh
+make identity-preflight
+```
+
+This verifies the release checkout is pointed at the public
+`dnoegel/rasterklang-cli` repository and that `go.mod` declares
+`github.com/dnoegel/rasterklang-cli`. Fix the origin remote, module path, README
+links, and release workflow URLs before tagging if this preflight fails.
+
+### `version`
+
+Prints the release version, source commit, and build timestamp:
+
+```sh
+rasterklang --version
+rasterklang version
+```
 
 ### `info`
 
@@ -170,7 +297,7 @@ looked up by MD5 over the full SID file content including the header.
 Import the root package:
 
 ```go
-import sid "github.com/dnoegel/rasterklang"
+import sid "github.com/dnoegel/rasterklang-cli"
 ```
 
 The public API intentionally keeps emulator internals under `internal/`. Apps
@@ -378,3 +505,73 @@ silicon edge case is modeled.
 
 The code is structured so the parser, CPU, C64 bus, SID model, streaming
 renderer, and CLI can be improved independently.
+
+## Support Matrix
+
+| Area | Current support | Release note |
+| --- | --- | --- |
+| Platforms | Linux, macOS, and Windows archives for `amd64` and `arm64` | Built by the tag release workflow as `.tar.gz` archives with `.sha256` files. |
+| CLI playback | macOS native playback, Linux audio backends through common player commands, Windows render/analyze/info binaries | Windows direct audio playback needs manual validation before it is documented as first-class. |
+| SID formats | PSID and many RSID tunes | Unsupported RSID/BASIC/ROM edge cases report errors, unknown labels, or approximate playback instead of guaranteed fidelity. |
+| C64 system behavior | Direct `play` address tunes, many IRQ-driven tunes, many BASIC RSID launchers | No full C64 main loop and no complete BASIC/KERNAL ROM behavior. |
+| SID audio | 6581/8580-aware synthesis, ADSR, D418 samples, OSC3/ENV3, multimode filtering | Tuned approximation, not a measured chip model. |
+| Song lengths | HVSC `Songlengths.md5` lookup plus heuristic fallback | Heuristic estimates are conservative and may return `unknown`. |
+| Bundled media | None | Rasterklang does not bundle HVSC, C64 ROM images, or third-party SID files. |
+| Package managers | Draft Homebrew formula and Scoop manifest generated from release checksums | No package manager formula is published yet; Scoop is the first Windows package path, while winget is deferred until a suitable Windows `.exe`/`.zip` or installer artifact exists. Use release archives or `go install` until a tap/bucket/package path exists. |
+
+## Unsupported Tune Behavior
+
+Rasterklang should fail plainly or label support uncertainty instead of claiming
+full C64 compatibility. Unsupported RSID/BASIC/ROM edge cases can show up as:
+
+- `info` labels such as `BASIC`, `Magic Voice`, `SAM/Reciter`, `Electronic Speech Systems`, or `Sound Master`.
+- parser or loader errors for invalid or unsupported files.
+- duration estimates with low confidence or `unknown`.
+- approximate playback when a tune depends on unimplemented C64 system behavior,
+  unstable CPU edge cases, or exact analog SID behavior.
+
+Use HVSC type filters such as `-exclude-type "Electronic Speech Systems"` when
+running compatibility scans for release metrics. Use `duration-validate` with an
+HVSC `Songlengths.md5` file when you need evidence for song-length behavior.
+
+## Troubleshooting
+
+### Linux audio backends
+
+Default Linux builds avoid a hard ALSA development dependency. The CLI writes
+PCM through the first available command in this order: `aplay`, `ffplay`,
+`paplay`, then `pw-play`. Install one of those tools if `rasterklang play`
+cannot open audio.
+
+For direct ALSA output through the Go audio backend, build locally with:
+
+```sh
+go build -tags rasterklang_alsa ./cmd/rasterklang
+```
+
+### Unsupported RSID/BASIC/ROM edge cases
+
+Rasterklang does not ship or emulate complete C64 ROM images. Tunes that depend
+on exact BASIC/KERNAL ROM calls, unusual loader behavior, or a full C64 main
+loop may not start or may sound wrong. Use `rasterklang info` first to inspect
+labels and support verdicts, then try `render` with a fixed `-duration` to
+produce a reproducible artifact for debugging.
+
+### C64 ROM images and HVSC
+
+Rasterklang does not bundle C64 ROM images, HVSC, or third-party SID files. Use
+your own legally obtained `.sid` collection. If a command needs song-length
+metadata, pass the path to your local HVSC `Songlengths.md5`.
+
+### Duration looks wrong
+
+SID files do not carry authoritative song lengths. Prefer an HVSC
+`Songlengths.md5` entry when available. The built-in duration heuristic is a
+fallback and can return `unknown`; pass `-duration` for playback or rendering
+when you need a fixed span.
+
+### Output clips or sounds too quiet
+
+Run `rasterklang analyze` on a rendered WAV or SID to inspect peak, RMS, DC
+offset, and clipping. For playback, adjust `-volume`; for experiments, compare
+profiles with `render -profile`.

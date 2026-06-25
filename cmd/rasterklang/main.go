@@ -4,43 +4,63 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		usage(stderr)
+		return 2
 	}
 
 	var err error
-	switch os.Args[1] {
+	switch args[0] {
+	case "-version", "--version", "version":
+		printVersion(stdout)
+		return 0
 	case "info":
-		err = info(os.Args[2:])
+		err = info(args[1:])
 	case "play":
-		err = play(os.Args[2:])
+		err = play(args[1:])
 	case "render":
-		err = render(os.Args[2:])
+		err = render(args[1:])
 	case "analyze":
-		err = analyze(os.Args[2:])
+		err = analyze(args[1:])
 	case "duration":
-		err = duration(os.Args[2:])
+		err = duration(args[1:])
 	case "duration-validate":
-		err = durationValidate(os.Args[2:])
+		err = durationValidate(args[1:])
 	default:
-		usage()
-		os.Exit(2)
+		usage(stderr)
+		return 2
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "rasterklang:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "rasterklang:", err)
+		return 1
 	}
+	return 0
 }
 
-func usage() {
-	fmt.Fprintf(os.Stderr, `rasterklang is a pure-Go SID engine POC.
+func printVersion(w io.Writer) {
+	fmt.Fprintf(w, "rasterklang %s\ncommit %s\nbuilt %s\n", version, commit, date)
+}
+
+func usage(w io.Writer) {
+	fmt.Fprintf(w, `rasterklang is a pure-Go SID engine and CLI.
 
 Usage:
+  rasterklang version
   rasterklang info <file.sid>
   rasterklang play [options] <file.sid>
   rasterklang render [options] <file.sid>
@@ -123,6 +143,10 @@ Duration validation options:
         maximum number of SID files to scan; 0 means no limit
   -show-ok
         print rows within threshold too
+
+Global options:
+  --version
+        print release metadata
 
 `)
 }

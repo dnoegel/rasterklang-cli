@@ -1,0 +1,173 @@
+name: Package Channels
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Rasterklang release tag that already has package manifest assets"
+        required: true
+        type: string
+      homebrew_tap_repo:
+        description: "Repository for the Homebrew tap PR"
+        required: true
+        default: "dnoegel/rasterklang-homebrew-tap"
+        type: string
+      scoop_bucket_repo:
+        description: "Repository for the Scoop bucket PR"
+        required: true
+        default: "dnoegel/rasterklang-scoop-bucket"
+        type: string
+      publish_homebrew:
+        description: "Open or update the Homebrew tap PR"
+        required: true
+        default: false
+        type: boolean
+      publish_scoop:
+        description: "Open or update the Scoop bucket PR"
+        required: true
+        default: false
+        type: boolean
+      dry_run:
+        description: "Download and validate manifests without opening package-channel PRs"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Download package manifest drafts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download generated package manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          mkdir -p .release-input dist/package-manifests/homebrew dist/package-manifests/scoop
+          gh release download "$RELEASE_TAG" \
+            --repo dnoegel/rasterklang-cli \
+            --pattern "rasterklang.rb" \
+            --pattern "rasterklang.json" \
+            --dir .release-input
+          cp .release-input/rasterklang.rb dist/package-manifests/homebrew/rasterklang.rb
+          cp .release-input/rasterklang.json dist/package-manifests/scoop/rasterklang.json
+          test -s dist/package-manifests/homebrew/rasterklang.rb
+          test -s dist/package-manifests/scoop/rasterklang.json
+
+      - name: Upload package channel manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-channel-manifests
+          path: |
+            dist/package-manifests/homebrew/rasterklang.rb
+            dist/package-manifests/scoop/rasterklang.json
+          if-no-files-found: error
+
+  homebrew:
+    name: Homebrew tap handoff
+    needs: prepare
+    if: ${{ inputs.publish_homebrew || inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download package channel manifests
+        uses: actions/download-artifact@v4
+        with:
+          name: package-channel-manifests
+          path: dist/package-manifests
+
+      - name: Validate Homebrew formula
+        run: |
+          test -s dist/package-manifests/homebrew/rasterklang.rb
+          if command -v brew >/dev/null 2>&1; then
+            brew audit --strict --online dist/package-manifests/homebrew/rasterklang.rb
+          else
+            echo "brew is not installed on this runner; tap CI must run brew audit --strict --online."
+          fi
+
+      - name: Check out Homebrew tap
+        if: ${{ inputs.publish_homebrew && !inputs.dry_run }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.homebrew_tap_repo }}
+          token: ${{ secrets.PACKAGE_CHANNEL_TOKEN }}
+          path: homebrew-tap
+
+      - name: Stage Homebrew formula update
+        if: ${{ inputs.publish_homebrew && !inputs.dry_run }}
+        run: |
+          mkdir -p homebrew-tap/Formula
+          cp dist/package-manifests/homebrew/rasterklang.rb homebrew-tap/Formula/rasterklang.rb
+
+      - name: Open Homebrew tap pull request
+        if: ${{ inputs.publish_homebrew && !inputs.dry_run }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PACKAGE_CHANNEL_TOKEN }}
+          path: homebrew-tap
+          branch: rasterklang-${{ inputs.release_tag }}
+          commit-message: "Update rasterklang formula to ${{ inputs.release_tag }}"
+          title: "Update rasterklang to ${{ inputs.release_tag }}"
+          body: |
+            Generated from dnoegel/rasterklang-cli release `${{ inputs.release_tag }}`.
+
+            Verify with:
+            - `brew audit --strict --online Formula/rasterklang.rb`
+            - `brew install --build-from-source ./Formula/rasterklang.rb`
+
+  scoop:
+    name: Scoop bucket handoff
+    needs: prepare
+    if: ${{ inputs.publish_scoop || inputs.dry_run }}
+    runs-on: windows-latest
+    steps:
+      - name: Download package channel manifests
+        uses: actions/download-artifact@v4
+        with:
+          name: package-channel-manifests
+          path: dist/package-manifests
+
+      - name: Validate Scoop manifest
+        shell: pwsh
+        run: |
+          if (!(Test-Path dist/package-manifests/scoop/rasterklang.json)) {
+            throw "Missing dist/package-manifests/scoop/rasterklang.json"
+          }
+          Get-Content dist/package-manifests/scoop/rasterklang.json | ConvertFrom-Json | Out-Null
+          if (Get-Command scoop -ErrorAction SilentlyContinue) {
+            scoop install ./dist/package-manifests/scoop/rasterklang.json
+          } else {
+            Write-Host "scoop is not installed on this runner; bucket CI must run scoop install."
+          }
+
+      - name: Check out Scoop bucket
+        if: ${{ inputs.publish_scoop && !inputs.dry_run }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.scoop_bucket_repo }}
+          token: ${{ secrets.PACKAGE_CHANNEL_TOKEN }}
+          path: scoop-bucket
+
+      - name: Stage Scoop manifest update
+        if: ${{ inputs.publish_scoop && !inputs.dry_run }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path scoop-bucket/bucket | Out-Null
+          Copy-Item dist/package-manifests/scoop/rasterklang.json scoop-bucket/bucket/rasterklang.json
+
+      - name: Open Scoop bucket pull request
+        if: ${{ inputs.publish_scoop && !inputs.dry_run }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PACKAGE_CHANNEL_TOKEN }}
+          path: scoop-bucket
+          branch: rasterklang-${{ inputs.release_tag }}
+          commit-message: "Update rasterklang manifest to ${{ inputs.release_tag }}"
+          title: "Update rasterklang to ${{ inputs.release_tag }}"
+          body: |
+            Generated from dnoegel/rasterklang-cli release `${{ inputs.release_tag }}`.
+
+            Verify with:
+            - `scoop install ./bucket/rasterklang.json`

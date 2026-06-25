@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dnoegel/rasterklang/internal/sidfile"
+	"github.com/dnoegel/rasterklang-cli/internal/sidfile"
 )
 
 type Entry struct {

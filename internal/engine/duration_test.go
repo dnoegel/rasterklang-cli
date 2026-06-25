@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dnoegel/rasterklang/internal/sidfile"
+	"github.com/dnoegel/rasterklang-cli/internal/sidfile"
 )
 
 func TestEstimateDurationDetectsSteadyLoop(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	sid "github.com/dnoegel/rasterklang"
+	sid "github.com/dnoegel/rasterklang-cli"
 )
 
 func render(args []string) error {

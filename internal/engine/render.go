@@ -6,11 +6,11 @@ import (
 	"math"
 	"time"
 
-	"github.com/dnoegel/rasterklang/internal/basic"
-	"github.com/dnoegel/rasterklang/internal/c64"
-	"github.com/dnoegel/rasterklang/internal/sid"
-	"github.com/dnoegel/rasterklang/internal/sidfile"
-	sidprofile "github.com/dnoegel/rasterklang/profile"
+	"github.com/dnoegel/rasterklang-cli/internal/basic"
+	"github.com/dnoegel/rasterklang-cli/internal/c64"
+	"github.com/dnoegel/rasterklang-cli/internal/sid"
+	"github.com/dnoegel/rasterklang-cli/internal/sidfile"
+	sidprofile "github.com/dnoegel/rasterklang-cli/profile"
 )
 
 type RenderOptions struct {
