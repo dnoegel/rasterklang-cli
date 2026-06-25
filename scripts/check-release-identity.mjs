@@ -4,10 +4,13 @@ import { spawnSync } from "node:child_process";
 const expectedOwner = "dnoegel";
 const expectedRepo = "rasterklang-cli";
 const expectedModule = "github.com/dnoegel/rasterklang-cli";
+const firstReleaseVersion = "v0.1.0";
 
 const modulePath = readModulePath();
 const remoteUrl = readOriginRemote();
 const remote = parseGitHubRemote(remoteUrl);
+const tagCommit = readGitRef(`refs/tags/${firstReleaseVersion}^{commit}`);
+const headCommit = readGitRef("HEAD");
 const errors = [];
 
 if (modulePath !== expectedModule) {
@@ -22,6 +25,10 @@ if (!remote) {
   if (actual !== expected) {
     errors.push(`origin remote is ${actual}, expected ${expected}`);
   }
+}
+
+if (tagCommit && headCommit && tagCommit !== headCommit) {
+  errors.push(`${firstReleaseVersion} tag commit is ${tagCommit.slice(0, 12)}, expected current HEAD ${headCommit.slice(0, 12)}`);
 }
 
 if (errors.length > 0) {
@@ -45,6 +52,18 @@ function readModulePath() {
 
 function readOriginRemote() {
   const result = spawnSync("git", ["remote", "get-url", "origin"], {
+    encoding: "utf8",
+  });
+
+  if (result.status !== 0) {
+    return "";
+  }
+
+  return result.stdout.trim();
+}
+
+function readGitRef(ref) {
+  const result = spawnSync("git", ["rev-parse", "--verify", ref], {
     encoding: "utf8",
   });
 
