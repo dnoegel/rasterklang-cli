@@ -28,6 +28,16 @@ jobs:
       - name: Install staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@latest
 
+      - name: Require release tag
+        run: |
+          case "${GITHUB_REF}" in
+            refs/tags/v*) ;;
+            *)
+              echo "Release workflow must run from a v* tag, got ${GITHUB_REF}"
+              exit 1
+              ;;
+          esac
+
       - name: Run tests
         run: make check
 
