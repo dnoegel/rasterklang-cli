@@ -22,9 +22,9 @@ const checks = [
     message: "release CI must run the race detector before publishing",
   },
   {
-    file: "README.md",
+    file: "docs/release.md",
     text: "make race",
-    message: "README must document the race detector gate",
+    message: "release docs must document the race detector gate",
   },
   {
     file: "CONTRIBUTING.md",

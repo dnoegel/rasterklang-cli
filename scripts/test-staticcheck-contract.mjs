@@ -22,9 +22,9 @@ const checks = [
     message: "release CI must install staticcheck before make check",
   },
   {
-    file: "README.md",
+    file: "docs/release.md",
     text: "staticcheck",
-    message: "README must document the staticcheck release gate",
+    message: "release docs must document the staticcheck release gate",
   },
   {
     file: "CONTRIBUTING.md",
