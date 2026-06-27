@@ -213,10 +213,9 @@ Reference-render comparison:
   regression's transient limit.
 - Sound profiles now support an optional `filter.modeResponseDB.lowPass`
   correction, matching the existing BP/HP response-profile mechanism. The
-  built-in `balanced` profile still has no LP response correction; this field is
-  a profile/optimizer surface for fitted candidates. It is an approximation,
-  not established SID behavior, and should be accepted only after sweep and tune
-  guardrails show improvement.
+  built-in `balanced` profile uses LP/BP/HP response corrections fitted through
+  the optimizer. These terms are approximations, not established SID behavior,
+  and future changes should still require sweep and tune guardrails.
 
 Synthetic filter sweep harness:
 
@@ -276,6 +275,93 @@ Synthetic filter sweep harness:
   about 1.95 to 1.88, and the filter-heavy subset moved from about 2.02 to
   1.86. This was an RMS/peak guardrail only; the synthetic dry sweep remains the
   primary filter-shape metric for this change.
+- On 2026-06-26 the 6581 `balanced` BP/HP mode-response constants were promoted from a
+  VICE `vsid` synthetic calibration run. The candidate came from
+  `rasterklang-optimize filter sweep -reference-renderer vsid -dry-normalize`
+  over the static 255-stimulus suite, followed by response-fit residual
+  candidates. The promoted candidate applies a damped 0.25 strength BP/HP
+  response correction only; the LP residual was left at the previous value
+  because it pushed the Airwolf max-delta artifact guardrail over its existing
+  threshold. Cutoff curve, resonance curve, damping, drive, mode gains, and
+  output stage constants stayed unchanged.
+- Evidence for this promotion:
+  - Static VICE sweep score improved from about 3.3298 to 3.2601, mostly through
+    dry-corrected band distance.
+  - Expanded VICE sweep (`-suite expanded`, 399 stimuli per profile) improved
+    the promotion score from about 3.3294 to 3.2653.
+  - The cached SOASC Airwolf R3 real-recording guardrail stayed stable over the
+    10 second window: spectral distance about 0.954, band distance about 0.532,
+    and full selected filter-window coverage.
+  - The full 10-tune `filter-6581-classic` SOASC guardrail completed after the
+    SOASC downloader switched to search-first selection: 10/10 matched,
+    downloaded, and compared. Median spectral distance was about 1.413, median
+    band distance about 1.329, and the 3 higher-correlation comparisons had
+    median spectral distance about 1.186 and band distance about 0.743.
+    Filter-active windows were available for 3 tunes, with median filter band
+    distance about 1.333.
+  - The first 8 seconds of `Airwolf_Title.sid` now measure peak about 0.653,
+    max delta about 0.316, and no clipping, keeping the existing artifact
+    guardrail intact.
+- Remaining uncertainty: the SOASC run is still MP3-based, uses only the first
+  10 seconds of each tune, and only 3/10 comparisons had high envelope
+  correlation. This is therefore a VICE-synthetic-plus-SOASC guardrail
+  promotion, not a measured-chip calibration. Longer windows, lossless
+  recordings, and chip-revision-specific runs should still be used before more
+  aggressive filter-curve changes.
+- A follow-up output-color pass on 2026-06-26 left the promoted filter constants
+  unchanged and moved only the 6581 external output low-pass from `15500 Hz` to
+  `16000 Hz`.
+  - Why: after the BP/HP promotion, VICE and SOASC still showed a consistent
+    high/air deficit, but voice-DAC low-pass candidates that improved dry
+    brightness regressed the full static filter score.
+  - Evidence: `rasterklang-optimize filter compare-profile` marked the 16 kHz
+    output-only candidate promotable on the VICE static suite: weighted delta
+    about `+0.006`, curve-align RMSE `0.279 -> 0.276 dB`, with only small
+    dry-band and fit-test regressions.
+  - Guardrails: Airwolf's first 8 seconds stayed clean (`peak 0.653`, max delta
+    about `0.318`, no clipping). The full cached 10-tune SOASC classic run
+    stayed matched/downloaded/compared at 10/10 and improved median spectral
+    distance `1.413 -> 1.407`, median band distance `1.329 -> 1.316`, and
+    filter-window band distance `1.333 -> 1.320`.
+  - Rejected alternatives: `16500 Hz` and `17000 Hz` output-only candidates
+    were neutral-to-negative on the weighted static score; `13000 Hz`
+    voice-DAC candidates improved narrow dry-waveform spot checks but regressed
+    full filter transfer enough to reject them.
+  - Remaining uncertainty: this is still a tuned output-stage approximation.
+    The SOASC evidence is MP3-based and short-window; more aggressive output or
+    per-voice brightness changes need longer/lossless real-chip validation.
+- On 2026-06-27 the 6581 built-in `balanced` filter constants were retuned from
+  a larger HVSC/SOASC recording-first run instead of the synthetic sweep
+  objective.
+  - Why: earlier synthetic optimizations could improve controlled sweeps while
+    moving away from real-recording behavior. The new run treated the analog
+    filter fit more like a regression problem over a broad real corpus.
+  - Data: a full HVSC filter-coverage scan selected stratified real-recording
+    splits of 400 train, 100 dev, and 100 holdout tunes from 6581-oriented
+    filter-active material. The train baseline compared 380/400 SOASC MP3
+    recordings; dev and holdout gates compared 94/100 and 93/100 recordings.
+  - Optimizer evidence: the 400-tune real-recording train loss moved from the
+    P2 seed's `26.5012` to `25.8040` for `full-gen-002-cand-005`. On the same
+    train evaluation, high-correlation filter-window band distance moved from
+    about `1.1724` to `1.1168`, and high-correlation filter-window spectral
+    distance moved from about `1.2523` to `1.2295`.
+  - Promotion gates: `compare-profile` marked the candidate promotable against
+    the P2 seed on dev+holdout with total delta `+1.904` and holdout delta
+    `+0.590`. It also marked the candidate promotable against the current
+    built-in `balanced` default with total delta `+2.931` and holdout delta
+    `+2.028`.
+  - Filter-window evidence against the previous built-in default: dev
+    high-correlation filter band distance improved `1.539 -> 1.309`, and
+    holdout high-correlation filter band distance improved `1.280 -> 1.124`.
+    The matching high-correlation filter spectral distances improved
+    `1.351 -> 1.296` on dev and `1.267 -> 1.219` on holdout.
+  - Resulting profile changes: the fitted 6581 profile is less driven and more
+    damped than the previous default, with lower low-pass gain, lower output
+    drive, higher damping depth, and updated LP/BP/HP response corrections.
+  - Remaining uncertainty: this is still a tuned approximation based on SOASC
+    MP3 windows, not a measured chip model. The data is much broader than the
+    earlier 10-tune guardrail, but longer windows, lossless recordings, and
+    chip-revision-specific validation remain the right next step.
 
 Real hardware recording comparison:
 
@@ -358,10 +444,11 @@ HVSC corpus switch:
   This avoids duplicate corpus discovery and lets validation use stable HVSC
   paths.
 - Added `cmd/soasc-corpus` to collect larger real-hardware comparison corpora.
-  For local HVSC paths it does not need the SOASC search page: it probes the
-  public SOASC mirror directly by HVSC version, recording format, subtune, and
-  chip revision, then downloads selected recordings outside the repository and
-  optionally runs `cmd/recording-compare`.
+  For local HVSC paths it now queries the SOASC search page first and uses
+  direct public-mirror probing only as a fallback. This avoids long stalls when
+  the mirror does not answer `HEAD`/download requests promptly for uncached
+  files. Downloads still stay outside the repository and optional comparisons
+  run through `cmd/recording-compare`.
 - First larger SOASC runs:
 
   ```
@@ -594,7 +681,8 @@ Waveform and output color pass:
 - The 6581 voice-DAC smoothing cutoff moved from `8200 Hz` to `11500 Hz`, and
   the external 6581 output low-pass moved from `13500 Hz` to `15500 Hz`. A more
   open `18000 Hz` output made Airwolf's max-delta guardrail too close to the
-  failure threshold, so `15500 Hz` is the current compromise.
+  failure threshold, so `15500 Hz` was kept for this pass. A later conservative
+  output-color follow-up moved the default to `16000 Hz`.
 - Final dry waveform spot checks:
 
   - Triangle 220 Hz band distance improved from about 2.49 to about 0.73; high
