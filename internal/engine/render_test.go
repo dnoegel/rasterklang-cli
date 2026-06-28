@@ -776,10 +776,6 @@ func syntheticKernalIRQHookRSID() []byte {
 
 func syntheticNMIRSID() []byte {
 	data := syntheticInterruptSID("RSID")
-	const (
-		load = 0x1000
-		irq  = 0x1030
-	)
 	payload := data[0x7c:]
 	payload[5] = 0x18
 	payload[10] = 0x19

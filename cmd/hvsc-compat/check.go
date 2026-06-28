@@ -198,7 +198,7 @@ func checkSubtuneWithSilenceDiagnostics(tune *sid.Tune, subtune int, cfg config)
 			return fmt.Errorf("render made no progress")
 		}
 	}
-	traceSeq = collectSIDWriteDiagnostics(stream, traceSeq, &diag)
+	collectSIDWriteDiagnostics(stream, traceSeq, &diag)
 	snapshot := stream.Snapshot()
 	diag.PC = snapshot.CPU.PC
 	diag.BankRegister = snapshot.Bus.BankRegister

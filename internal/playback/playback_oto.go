@@ -41,7 +41,6 @@ func PlayStream(factory SourceFactory, sampleRate int, opts Options) error {
 
 func playOnce(ctx *oto.Context, source SampleSource, opts Options) (bool, error) {
 	player := ctx.NewPlayer(newPCMReader(source, opts.Volume, opts.Stop))
-	defer player.Close()
 	player.Play()
 
 	ticker := time.NewTicker(25 * time.Millisecond)

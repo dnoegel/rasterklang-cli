@@ -43,10 +43,10 @@ func durationValidate(args []string) error {
 		return err
 	}
 	if *dbPath == "" {
-		return fmt.Errorf("usage: rasterklang duration-validate -songlengths Songlengths.md5 <file.sid|dir>...")
+		return fmt.Errorf("missing Songlengths.md5 path")
 	}
 	if fs.NArg() == 0 {
-		return fmt.Errorf("usage: rasterklang duration-validate -songlengths Songlengths.md5 <file.sid|dir>...")
+		return fmt.Errorf("missing SID input path")
 	}
 	if *subtune < 0 {
 		return fmt.Errorf("subtune must not be negative")

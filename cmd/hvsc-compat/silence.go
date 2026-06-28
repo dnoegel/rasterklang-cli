@@ -42,10 +42,10 @@ func classifySilence(path string, tune *sid.Tune, diag silenceDiagnostics) strin
 	if tune == nil || !tune.Basic {
 		return "no_sid_writes"
 	}
-	if tune.HasType(sid.TuneTypeSpeechExtension) || knownExternalSpeechBASICPath(path) {
+	if tune.HasType(sid.TuneTypeSpeechExtension) || hasExternalSpeechBASICSignals(tune.Payload) || knownExternalSpeechBASICPath(path) {
 		return "speech_extension"
 	}
-	if tune.HasType(sid.TuneTypeCustomBASICExtension) || knownCustomBASICPath(path) {
+	if tune.HasType(sid.TuneTypeCustomBASICExtension) || hasCustomBASICSignals(tune.Payload) || knownCustomBASICPath(path) {
 		return "custom_basic_extension"
 	}
 	if hasBASICSYS(tune.Payload) {

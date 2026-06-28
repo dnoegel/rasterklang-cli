@@ -140,14 +140,6 @@ func (r *Runner) runBASICROMStub(pc uint16) (int, bool) {
 	return 80, true
 }
 
-func (r *Runner) romCHRGET() {
-	ptr := r.textPointer()
-	ptr++
-	r.setTextPointerAddress(ptr)
-	r.cpu.A = r.bus.Read(ptr)
-	r.setCPUZN(r.cpu.A)
-}
-
 func (r *Runner) romCHRGOT() {
 	ptr := r.textPointer()
 	r.cpu.A = r.bus.Read(ptr)

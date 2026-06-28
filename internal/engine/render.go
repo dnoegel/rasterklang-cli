@@ -89,11 +89,7 @@ type machineState struct {
 
 // NewStream initializes a tune and returns a stateful sample renderer.
 func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
-	state, err := newMachineState(tune, machineOptions{
-		Subtune:      opts.Subtune,
-		SampleRate:   opts.SampleRate,
-		SoundProfile: opts.SoundProfile,
-	})
+	state, err := newMachineState(tune, machineOptions(opts))
 	if err != nil {
 		return nil, err
 	}

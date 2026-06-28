@@ -166,7 +166,7 @@ func Parse(data []byte) (*Tune, error) {
 
 func (t *Tune) ValidateForPlayback() error {
 	if t.MUS {
-		return errors.New("Compute!'s MUS files are not supported by Rasterklang")
+		return errors.New("compute!'s MUS files are not supported by Rasterklang")
 	}
 	if t.PlayAddress == 0 && t.InitAddress == 0 {
 		return errors.New("interrupt-driven tunes need a non-zero init address")

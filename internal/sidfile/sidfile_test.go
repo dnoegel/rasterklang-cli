@@ -194,7 +194,7 @@ func TestValidateForPlaybackRejectsMUSWithReleaseQualityError(t *testing.T) {
 	if got := err.Error(); strings.Contains(strings.ToLower(got), "poc") {
 		t.Fatalf("support error should not describe Rasterklang as a POC: %q", got)
 	}
-	if got := err.Error(); got != "Compute!'s MUS files are not supported by Rasterklang" {
+	if got := err.Error(); got != "compute!'s MUS files are not supported by Rasterklang" {
 		t.Fatalf("support error = %q", got)
 	}
 }

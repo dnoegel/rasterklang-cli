@@ -81,7 +81,7 @@ func (e *envelope) clockExponential() bool {
 
 func exponentialPeriod(level byte) int {
 	switch {
-	case level >= 255:
+	case level == 255:
 		return 1
 	case level >= 93:
 		return 2
