@@ -56,6 +56,9 @@ func (b *Bus) AdvanceCycles(cycles int) {
 	if cycles <= 0 {
 		return
 	}
+	if b.Trace != nil {
+		b.Trace.Advance(cycles)
+	}
 	b.advanceVIC(cycles)
 	b.advanceCIA(cia1Base, &b.hw.cia1, cycles)
 	b.advanceCIA(cia2Base, &b.hw.cia2, cycles)
@@ -171,6 +174,9 @@ func (b *Bus) checkRasterIRQ() {
 	}
 	if b.hw.vic.rasterLine == compare {
 		b.RAM[vicD019] |= 0x01
+		if b.Trace != nil {
+			b.Trace.VICRasterIRQ(b.hw.vic.rasterLine)
+		}
 	}
 	b.refreshVICIRQ()
 }
@@ -201,6 +207,9 @@ func (b *Bus) writeCIATimerLatch(base uint16, cia *ciaState, addr uint16, value 
 		cia.timerA = b.ciaTimerALatch(base)
 		cia.timerALoaded = true
 	}
+	if b.Trace != nil {
+		b.Trace.CIATimerChange(base, b.ciaTimerALatch(base), cia.controlA, cia.timerA)
+	}
 }
 
 func (b *Bus) writeCIAControlA(base uint16, cia *ciaState, value byte) {
@@ -209,6 +218,9 @@ func (b *Bus) writeCIAControlA(base uint16, cia *ciaState, value byte) {
 	if value&0x10 != 0 || !cia.timerALoaded {
 		cia.timerA = b.ciaTimerALatch(base)
 		cia.timerALoaded = true
+	}
+	if b.Trace != nil {
+		b.Trace.CIATimerChange(base, b.ciaTimerALatch(base), cia.controlA, cia.timerA)
 	}
 }
 
@@ -231,6 +243,9 @@ func (b *Bus) advanceCIA(base uint16, cia *ciaState, cycles int) {
 		cia.irqFlags |= 0x01
 		b.refreshCIAICR(base, cia)
 		cia.timerA = b.ciaTimerALatch(base)
+		if b.Trace != nil {
+			b.Trace.CIAUnderflow(base, cia.timerA, cia.controlA)
+		}
 		if cia.controlA&0x08 != 0 {
 			cia.controlA &^= 0x01
 			b.RAM[base+0x0e] = cia.controlA &^ 0x10
@@ -265,3 +280,22 @@ func (b *Bus) refreshCIAICR(base uint16, cia *ciaState) {
 	}
 	b.RAM[base+0x0d] = value
 }
+
+// TraceRasterState reports the observable VIC-II timing state. It exists so
+// the trace layer can serialize the observation environment; it has no effect
+// on emulation.
+func (b *Bus) TraceRasterState() (line int, lines int, cyclesPerLine float64) {
+	return b.hw.vic.rasterLine, b.hw.vic.rasterLines, b.hw.vic.cyclesPerLine
+}
+
+// TraceCIAState reports the observable timer A state of one CIA.
+func (b *Bus) TraceCIAState(base uint16) (latch uint16, timer uint16, control byte, irqMask byte) {
+	cia := &b.hw.cia1
+	if base == cia2Base {
+		cia = &b.hw.cia2
+	}
+	return b.ciaTimerALatch(base), b.ciaTimerA(base, cia), cia.controlA, cia.irqMask
+}
+
+// TraceCIABases lists the CIA base addresses the bus models.
+func TraceCIABases() []uint16 { return []uint16{cia1Base, cia2Base} }

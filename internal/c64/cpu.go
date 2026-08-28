@@ -34,7 +34,8 @@ type StepInfo struct {
 }
 
 type SubroutineCall struct {
-	entrySP byte
+	entrySP   byte
+	entryAddr uint16
 }
 
 type IRQCall struct {

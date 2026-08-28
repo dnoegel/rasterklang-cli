@@ -3,9 +3,31 @@ package c64
 // Decodes and executes one 6502/6510 instruction.
 
 func (c *CPU) Step() (int, error) {
+	if c.Bus != nil && c.Bus.Trace != nil {
+		return c.stepTraced()
+	}
 	cycles, err := c.step()
 	if err == nil && c.Bus != nil {
 		c.Bus.AdvanceCycles(cycles)
+	}
+	return cycles, err
+}
+
+// stepTraced runs one instruction with the rk.trace.v1 recorder attached. It
+// brackets the instruction so that bus accesses can be attributed to it and
+// timestamped once the instruction's cycle count is known; emulator-internal
+// peeks outside this bracket are not recorded.
+func (c *CPU) stepTraced() (int, error) {
+	rec := c.Bus.Trace
+	pc := c.PC
+	rec.BeginInstruction(pc)
+	cycles, err := c.step()
+	rec.EndInstruction(cycles)
+	if err == nil {
+		c.Bus.AdvanceCycles(cycles)
+		if rec.LastOpcode() == 0x40 { // RTI
+			rec.InterruptExit(pc)
+		}
 	}
 	return cycles, err
 }

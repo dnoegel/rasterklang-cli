@@ -65,6 +65,12 @@ type machineOptions struct {
 	Subtune      int
 	SampleRate   int
 	SoundProfile *sidprofile.Profile
+
+	// installTrace is called once, after the payload is loaded and the
+	// machine environment is configured but before the init routine runs. It
+	// is the only place trace instrumentation is attached, and it is nil for
+	// every normal playback path.
+	installTrace func(bus *c64.Bus, cpu *c64.CPU, tune *sidfile.Tune, subtune int) error
 }
 
 type machineState struct {
@@ -89,7 +95,11 @@ type machineState struct {
 
 // NewStream initializes a tune and returns a stateful sample renderer.
 func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
-	state, err := newMachineState(tune, machineOptions(opts))
+	state, err := newMachineState(tune, machineOptions{
+		Subtune:      opts.Subtune,
+		SampleRate:   opts.SampleRate,
+		SoundProfile: opts.SoundProfile,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +154,11 @@ func newMachineState(tune *sidfile.Tune, opts machineOptions) (*machineState, er
 	}
 
 	cpu := c64.NewCPU(bus)
+	if opts.installTrace != nil {
+		if err := opts.installTrace(bus, cpu, tune, opts.Subtune); err != nil {
+			return nil, err
+		}
+	}
 	if tune.Basic {
 		program, err := basic.Parse(bus.RAM[:], tune.EffectiveLoad)
 		if err != nil {

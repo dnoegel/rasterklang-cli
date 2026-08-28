@@ -8,6 +8,7 @@ import (
 	"github.com/dnoegel/rasterklang-cli/internal/songlength"
 	"github.com/dnoegel/rasterklang-cli/internal/wav"
 	sidprofile "github.com/dnoegel/rasterklang-cli/profile"
+	"github.com/dnoegel/rasterklang-cli/trace"
 )
 
 type (
@@ -107,7 +108,41 @@ type (
 
 	// FailureError wraps engine playback errors with structured diagnostics.
 	FailureError = engine.FailureError
+
+	// TraceOptions controls cycle-timed rk.trace.v1 capture.
+	TraceOptions = engine.TraceOptions
+
+	// TraceResult summarizes a completed rk.trace.v1 capture.
+	TraceResult = engine.TraceResult
+
+	// TraceEnvironment is the fully specified observation environment E.
+	TraceEnvironment = trace.Environment
+
+	// TraceCategory selects which rk.trace.v1 record categories are emitted.
+	TraceCategory = trace.Category
 )
+
+const (
+	// TraceSchema is the cycle-timed trace schema identifier.
+	TraceSchema = trace.Schema
+
+	TraceCatSID          = trace.CatSID
+	TraceCatMemory       = trace.CatMemory
+	TraceCatInstructions = trace.CatInstructions
+	TraceCatInterrupts   = trace.CatInterrupts
+	TraceCatTiming       = trace.CatTiming
+	TraceCatFrames       = trace.CatFrames
+	TraceCatSMC          = trace.CatSMC
+	TraceCatAll          = trace.CatAll
+	TraceCatMinimal      = trace.CatMinimal
+)
+
+// CaptureTrace records a cycle-timed rk.trace.v1 event log for a tune.
+// Instrumentation is installed before the init routine runs and is entirely
+// observational; it is never active on the normal playback paths.
+func CaptureTrace(tune *Tune, opts TraceOptions) (*TraceResult, error) {
+	return engine.CaptureTrace(tune, opts)
+}
 
 const SoundProfileSchemaVersion = sidprofile.SchemaVersion
 

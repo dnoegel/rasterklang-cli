@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/dnoegel/rasterklang-cli/internal/sid"
+	"github.com/dnoegel/rasterklang-cli/trace"
 )
 
 type Bus struct {
@@ -16,6 +17,10 @@ type Bus struct {
 	DelaySIDWrites bool
 	pendingSID     []sidWrite
 	hw             hardwareState
+
+	// Trace is the optional rk.trace.v1 recorder. It is nil during normal
+	// playback, so instrumentation costs one pointer compare per bus access.
+	Trace *trace.Recorder
 }
 
 type Hooks struct {
@@ -158,6 +163,9 @@ func (b *Bus) basicROMVisible(addr uint16) bool {
 	return addr >= 0xa000 && addr <= 0xbfff && b.RAM[0x0001]&0x03 == 0x03
 }
 
+// Read decodes one bus read. When an rk.trace.v1 recorder is installed the
+// read is also reported to it; the uninstrumented path adds one pointer
+// compare.
 func (b *Bus) Read(addr uint16) byte {
 	if addr >= 0xd400 && addr <= 0xd41f && b.SID != nil {
 		reg := byte(addr - 0xd400)
@@ -165,20 +173,31 @@ func (b *Bus) Read(addr uint16) byte {
 		if b.Hooks.OnSIDRead != nil {
 			b.Hooks.OnSIDRead(reg, value)
 		}
+		if b.Trace != nil {
+			b.Trace.BusRead(addr, value, true)
+		}
 		return value
 	}
-	if value, ok := b.readIO(addr); ok {
-		return value
+	value, ok := b.readIO(addr)
+	if !ok {
+		if rom, isROM := b.KernalROMByte(addr); isROM {
+			value = rom
+		} else {
+			value = b.RAM[addr]
+		}
 	}
-	if value, ok := b.KernalROMByte(addr); ok {
-		return value
+	if b.Trace != nil {
+		b.Trace.BusRead(addr, value, false)
 	}
-	return b.RAM[addr]
+	return value
 }
 
 func (b *Bus) Write(addr uint16, value byte) {
 	if b.Hooks.OnBusWrite != nil {
 		b.Hooks.OnBusWrite(addr, value)
+	}
+	if b.Trace != nil {
+		b.Trace.BusWrite(addr, value, addr >= 0xd400 && addr <= 0xd41f && b.SID != nil)
 	}
 	if addr >= 0xd400 && addr <= 0xd41f && b.SID != nil {
 		reg := byte(addr - 0xd400)
