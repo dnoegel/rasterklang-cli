@@ -9,6 +9,7 @@ import (
 	sidchip "github.com/dnoegel/rasterklang-cli/internal/sid"
 	"github.com/dnoegel/rasterklang-cli/internal/sidfile"
 	sidprofile "github.com/dnoegel/rasterklang-cli/profile"
+	rktrace "github.com/dnoegel/rasterklang-cli/trace"
 )
 
 type DebugOptions struct {
@@ -17,6 +18,10 @@ type DebugOptions struct {
 	SoundProfile   *sidprofile.Profile
 	TraceMask      TraceMask
 	MaxTraceEvents int
+
+	// installTrace attaches an rk.trace.v1 recorder before the init routine
+	// runs. It is nil for every normal playback path.
+	installTrace func(bus *c64.Bus, cpu *c64.CPU, tune *sidfile.Tune, subtune int) error
 }
 
 type TraceMask uint64
@@ -35,6 +40,7 @@ type DebugStream struct {
 	state *machineState
 	mask  TraceMask
 	trace *traceRing
+	rec   *rktrace.Recorder
 
 	frame int64
 	cycle int64
@@ -141,6 +147,7 @@ func NewDebugStream(tune *sidfile.Tune, opts DebugOptions) (*DebugStream, error)
 		Subtune:      opts.Subtune,
 		SampleRate:   opts.SampleRate,
 		SoundProfile: opts.SoundProfile,
+		installTrace: opts.installTrace,
 	})
 	if err != nil {
 		return nil, err
@@ -150,6 +157,7 @@ func NewDebugStream(tune *sidfile.Tune, opts DebugOptions) (*DebugStream, error)
 		state: state,
 		mask:  opts.TraceMask,
 		phase: "idle",
+		rec:   state.bus.Trace,
 	}
 	if opts.TraceMask != 0 {
 		stream.trace = newTraceRing(traceCapacity(opts.MaxTraceEvents))
@@ -807,6 +815,14 @@ func (s *DebugStream) installAudioHook(audio *audioClock) {
 }
 
 func (s *DebugStream) emitFrame(kind string) TraceEvent {
+	if s.rec != nil {
+		start := kind == "frame.start"
+		s.rec.FrameBoundary(start, s.frame)
+		line, _, _ := s.state.bus.TraceRasterState()
+		_, t1, c1, _ := s.state.bus.TraceCIAState(0xdc00)
+		_, t2, c2, _ := s.state.bus.TraceCIAState(0xdd00)
+		s.rec.TimerState(line, t1, c1, t2, c2)
+	}
 	return s.emit(TraceFrames, TraceEvent{Kind: kind})
 }
 

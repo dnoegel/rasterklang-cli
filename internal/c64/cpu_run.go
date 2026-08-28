@@ -217,18 +217,28 @@ func (c *CPU) RunKernalIRQHookWithInfoHook(addr uint16, maxCycles int, afterStep
 func (c *CPU) BeginSubroutine(addr uint16, a byte) SubroutineCall {
 	c.PC = addr
 	c.A = a
-	call := SubroutineCall{entrySP: c.SP}
+	call := SubroutineCall{entrySP: c.SP, entryAddr: addr}
 	c.push(0xff)
 	c.push(0xff)
+	if c.Bus != nil && c.Bus.Trace != nil {
+		c.Bus.Trace.CallEnter(addr)
+	}
 	return call
 }
 
 func (c *CPU) SubroutineReturned(call SubroutineCall) bool {
-	return c.PC == 0x0000 && c.SP == call.entrySP
+	returned := c.PC == 0x0000 && c.SP == call.entrySP
+	if returned && c.Bus != nil && c.Bus.Trace != nil {
+		c.Bus.Trace.CallExit(call.entryAddr)
+	}
+	return returned
 }
 
 func (c *CPU) AbortSubroutine(call SubroutineCall) {
 	c.SP = call.entrySP
+	if c.Bus != nil && c.Bus.Trace != nil {
+		c.Bus.Trace.CallExit(call.entryAddr)
+	}
 }
 
 func (c *CPU) RunIRQ(vector uint16, maxCycles int) (int, irqResult, error) {
@@ -307,11 +317,17 @@ func (c *CPU) BeginIRQ(vector uint16) IRQCall {
 	c.push(c.P&^flagB | flagU)
 	c.setFlag(flagI, true)
 	c.PC = vector
+	if c.Bus != nil && c.Bus.Trace != nil {
+		c.Bus.Trace.InterruptEnter(vector)
+	}
 	return call
 }
 
 func (c *CPU) AbortIRQ(call IRQCall) {
 	c.restore(call.state)
+	if c.Bus != nil && c.Bus.Trace != nil {
+		c.Bus.Trace.InterruptExit(call.state.PC)
+	}
 }
 
 func (c *CPU) StepWithInfo() (StepInfo, error) {

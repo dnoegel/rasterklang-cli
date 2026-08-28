@@ -8,3 +8,6 @@ dist/
 hvsc-compat-failures.tsv
 docs/labeling-feasibility.md
 docs/superpowers/
+
+# Local eval/trace output
+out/
