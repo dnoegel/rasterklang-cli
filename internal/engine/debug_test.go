@@ -201,3 +201,25 @@ func hasTraceKind(events []TraceEvent, kind string) bool {
 	}
 	return false
 }
+
+func TestDebugStreamReportsInitWrites(t *testing.T) {
+	tune, err := sidfileParseSynthetic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type write struct {
+		addr, pc uint16
+		value    byte
+	}
+	var writes []write
+	if _, err := NewDebugStream(tune, DebugOptions{OnInitWrite: func(addr uint16, value byte, pc uint16) {
+		writes = append(writes, write{addr, pc, value})
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// syntheticPSID's init: LDA #imm; STA $D4xx six times, five bytes apart
+	want := []write{{0xd400, 0x1002, 0x00}, {0xd401, 0x1007, 0x10}, {0xd404, 0x100c, 0x11}, {0xd405, 0x1011, 0xf0}, {0xd406, 0x1016, 0xf0}, {0xd418, 0x101b, 0x0f}}
+	if !slices.Equal(writes, want) {
+		t.Fatalf("init writes = %#v, want %#v", writes, want)
+	}
+}

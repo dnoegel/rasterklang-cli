@@ -65,6 +65,7 @@ type machineOptions struct {
 	Subtune      int
 	SampleRate   int
 	SoundProfile *sidprofile.Profile
+	OnInitWrite  func(addr uint16, value byte, pc uint16)
 }
 
 type machineState struct {
@@ -89,7 +90,7 @@ type machineState struct {
 
 // NewStream initializes a tune and returns a stateful sample renderer.
 func NewStream(tune *sidfile.Tune, opts StreamOptions) (*Stream, error) {
-	state, err := newMachineState(tune, machineOptions(opts))
+	state, err := newMachineState(tune, machineOptions{Subtune: opts.Subtune, SampleRate: opts.SampleRate, SoundProfile: opts.SoundProfile})
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +176,7 @@ func newMachineState(tune *sidfile.Tune, opts machineOptions) (*machineState, er
 			previousSIDHook(reg, oldValue, value)
 		}
 	}
-	cycles, err := cpu.RunSubroutine(tune.InitAddress, byte(opts.Subtune-1), initCycles)
+	cycles, err := runInit(bus, cpu, tune.InitAddress, byte(opts.Subtune-1), initCycles, opts.OnInitWrite)
 	bus.Hooks.OnSIDWrite = previousSIDHook
 	if err != nil {
 		var halt *c64.CPUHaltError
@@ -1025,4 +1026,39 @@ func sidModel(model sidfile.Model) sid.Model {
 		return sid.Model8580
 	}
 	return sid.Model6581
+}
+
+// runInit runs the init call. With onWrite set it reports every bus write
+// with the instruction that made it: a write happens inside its
+// instruction's step, so writes are held until the step reports its PC.
+// The return address BeginSubroutine pushes is not the tune's: it is
+// written before the first instruction is fetched, while PC still points
+// at the init address.
+func runInit(bus *c64.Bus, cpu *c64.CPU, addr uint16, a byte, maxCycles int, onWrite func(addr uint16, value byte, pc uint16)) (int, error) {
+	if onWrite == nil {
+		return cpu.RunSubroutine(addr, a, maxCycles)
+	}
+	type write struct {
+		addr  uint16
+		value byte
+	}
+	var pending []write
+	started := false
+	previous := bus.Hooks.OnBusWrite
+	bus.Hooks.OnBusWrite = func(waddr uint16, value byte) {
+		if started || cpu.PC != addr {
+			started = true
+			pending = append(pending, write{waddr, value})
+		}
+		if previous != nil {
+			previous(waddr, value)
+		}
+	}
+	defer func() { bus.Hooks.OnBusWrite = previous }()
+	return cpu.RunSubroutineWithInfoHook(addr, a, maxCycles, func(step c64.StepInfo) {
+		for _, w := range pending {
+			onWrite(w.addr, w.value, step.PC)
+		}
+		pending = pending[:0]
+	})
 }

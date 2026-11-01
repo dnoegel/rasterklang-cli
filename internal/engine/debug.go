@@ -17,6 +17,10 @@ type DebugOptions struct {
 	SoundProfile   *sidprofile.Profile
 	TraceMask      TraceMask
 	MaxTraceEvents int
+	// OnInitWrite, when set, is called for every bus write of the tune's
+	// init call (which runs before tracing starts): the address, the value
+	// and the address of the instruction that wrote it.
+	OnInitWrite func(addr uint16, value byte, pc uint16)
 }
 
 type TraceMask uint64
@@ -141,6 +145,7 @@ func NewDebugStream(tune *sidfile.Tune, opts DebugOptions) (*DebugStream, error)
 		Subtune:      opts.Subtune,
 		SampleRate:   opts.SampleRate,
 		SoundProfile: opts.SoundProfile,
+		OnInitWrite:  opts.OnInitWrite,
 	})
 	if err != nil {
 		return nil, err
