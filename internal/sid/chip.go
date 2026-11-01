@@ -22,6 +22,11 @@ type Chip struct {
 	voices     [3]voice
 	voiceMask  byte
 
+	// busValue is the last byte written to any SID register. Reads of the
+	// write-only registers return it until the data bus latch fades.
+	busValue    byte
+	busValueTTL float64
+
 	filter       filterState
 	filterBypass bool
 	output       outputStage
@@ -75,7 +80,7 @@ func NewWithModel(sampleRate int, cpuHz float64, model Model) *Chip {
 		profile:    defaultSoundProfile(model),
 	}
 	for i := range c.voices {
-		c.voices[i].noise = uint32(0x7ffff8 + i*0x1f123)
+		c.voices[i].noise = uint32(noiseResetValue + i*0x1f123)
 	}
 	return c
 }
@@ -118,8 +123,10 @@ func (c *Chip) Read(reg byte) byte {
 		return c.oscillator3()
 	case 0x1c:
 		return c.voices[2].env.level
+	case 0x1d, 0x1e, 0x1f:
+		return c.regs[reg]
 	}
-	return c.regs[reg]
+	return c.busValue
 }
 
 func (c *Chip) Write(reg byte, value byte) {
@@ -128,6 +135,8 @@ func (c *Chip) Write(reg byte, value byte) {
 	}
 	old := c.regs[reg]
 	c.regs[reg] = value
+	c.busValue = value
+	c.busValueTTL = c.busValueHoldCycles()
 	if reg == 0x04 || reg == 0x0b || reg == 0x12 {
 		idx := int(reg / 7)
 		oldGate := old&0x01 != 0
@@ -172,7 +181,28 @@ func (c *Chip) Oversample() int {
 }
 
 func (c *Chip) RenderSubSample() float64 {
+	c.fadeBusValue(c.cpuHz / c.sampleRate)
 	return c.sample()
+}
+
+// busValueHoldCycles approximates how long the SID data bus latch keeps the
+// last written byte: a few milliseconds on the 6581, much longer on the 8580.
+// Real chips fade bit by bit; this drops the whole byte at once.
+func (c *Chip) busValueHoldCycles() float64 {
+	if c.model == Model8580 {
+		return 0xa2000
+	}
+	return 0x1d00
+}
+
+func (c *Chip) fadeBusValue(cycles float64) {
+	if c.busValueTTL <= 0 {
+		return
+	}
+	c.busValueTTL -= cycles
+	if c.busValueTTL <= 0 {
+		c.busValue = 0
+	}
 }
 
 // FastForwardSubSamples advances the SID's time-dependent state without
@@ -182,6 +212,7 @@ func (c *Chip) FastForwardSubSamples(samples int) {
 	if samples <= 0 {
 		return
 	}
+	c.fadeBusValue(float64(samples) * c.cpuHz / c.sampleRate)
 	for i := range c.voices {
 		c.fastForwardVoice(i, samples)
 	}

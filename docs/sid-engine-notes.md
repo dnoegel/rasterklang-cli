@@ -22,7 +22,10 @@ level behind them, and the validation still needed.
 | Wave DAC zero levels | Medium | The 6581 and 8580 zero offsets follow reSID-style values (`0x380` and `0x9e0`). This is better than a symmetric DAC, but not calibrated per chip. |
 | Floating waveform DAC | Medium | The hold times are based on reSID/VICE behavior: short on 6581, long on 8580. Decay shape is approximate. |
 | D418 volume DAC | Medium | The volume register can carry sample playback. The current model preserves moves and ramps startup changes, but does not emulate every analog output detail. |
-| ADSR envelope | Medium | The rate periods and exponential counter behavior are SID-inspired and musically useful, but edge cases such as delay bugs and all write-order quirks are incomplete. |
+| ADSR envelope | Medium-high | The rate counter is a 15-bit integer counter that only resets on an exact period match, so the ADSR delay bug (counter wrap through `$7FFF`) emerges naturally. Sustain runs on the decay period like the chip's shared decay/sustain state. Remaining write-order quirks and the exact wrap off-by-one are not modeled. |
+| Noise clock | High | The noise shift register is clocked on rising edges of accumulator bit 19 (16 times per oscillator period), and the test bit leaves it at `$7FFFF8`. Noise lockup through combined waveforms is not modeled. |
+| Read-modify-write bus cycles | High | 6502 RMW instructions write the unmodified value before the result. `INC $D019` style IRQ acknowledges and RMW on SID registers now see both writes. |
+| SID write-only register reads | Medium | Reads of `$D400-$D418` return the last byte written to any SID register until an approximate latch hold time expires (`$1D00` cycles on 6581, `$A2000` on 8580). Real chips fade bit by bit. |
 | Triangle waveform color | Medium | 6581 triangle uses 12-bit accumulator-derived stair steps. The earlier default saw bleed was removed after harmonic analysis showed it over-emphasized even harmonics versus sidplayfp; bleed remains profile-controlled. |
 | Pulse+saw combined waveform | Medium | The behavior is now modeled as a bitwise pull-down shape rather than a simple product. The concept matches SID/reSID descriptions, but the `pull`, `spread`, and `threshold` constants are still tuned approximations. |
 | Other combined waveforms | Low-medium | Non-`pulse+saw` combinations still use a simpler non-linear product approximation. These need more work. |
@@ -1412,6 +1415,69 @@ Remaining uncertainty:
   registers: https://www.c64-wiki.de/wiki/Magic_Voice.
 - ROM-backed BASIC/KERNAL execution remains intentionally out of scope because
   bundling original ROM images creates licensing and web-distribution problems.
+
+### Hardware timing quirks: ADSR delay, noise clock, RMW writes
+
+Problem:
+
+- Positioning work showed that the engine is used for composing and live
+  register manipulation (rasterklang-cycles, DAW). Behavior that differs from
+  real hardware there is a product problem: a tune that sounds right in
+  Rasterklang can sound different on a C64 or in sidplayfp.
+- The ADSR delay bug was explicitly missing. Real players use hard restart to
+  avoid it, so missing it hides authoring mistakes and changes note attacks.
+- Noise was clocked once per oscillator wrap, which made noise 16 times lower
+  in pitch than on the chip.
+- RMW instructions only performed the final write.
+
+Changes:
+
+- `envelope.rateCounter` is a 15-bit integer counter. Fractional CPU cycles
+  per sub-sample accumulate in `cycleFrac`. The counter resets only on an exact
+  match with the active period. When a gate or ADSR write lowers the period
+  below the current counter, the counter runs through `$7FFF` first, which
+  delays the next envelope step by up to about 33 ms (the ADSR delay bug).
+- Sustain now uses the decay period instead of the release period, matching
+  the chip's shared decay/sustain state.
+- Noise is clocked on every rising edge of accumulator bit 19, in normal and
+  fast-forward rendering. While the test bit is set the shift register is held
+  at `$7FFFF8`.
+- RMW opcodes (official and unofficial) write the original value before the
+  modified value.
+- Reads of write-only SID registers return the fading data bus value instead of
+  the stored register.
+
+Well-established behavior:
+
+- Rate counter period table, exact-match reset and the resulting delay bug,
+  bit-19 noise clocking, RMW dummy writes, and write-only reads returning the
+  bus value are documented SID/6502 behavior.
+
+Approximate:
+
+- The bus latch hold times are approximate and drop the whole byte at once.
+- The test-bit noise reset ignores the gradual bit fade real chips show while
+  test is held.
+- Noise lockup from combined waveforms and the exact counter wrap off-by-one are
+  not modeled.
+
+Expected improvement:
+
+- Noise drums and hi-hats are brighter. Commando got about +3.7 dB energy above
+  5 kHz in a 20 s render.
+- Attacks after a long release can be delayed like on hardware; tunes without
+  hard restart may lose or soften some note starts, as on a real C64.
+- `INC $D019` IRQ acknowledges work.
+
+Validation:
+
+- Unit tests cover counter wrap, fractional cycles, 16 noise clocks per period,
+  test-bit reset, RMW dummy writes, `INC $D019`, and bus latch fade.
+- `hvsc-compat -subtunes default -duration 1s` on 2241 MUSICIANS files reported
+  the same 3 failures before and after, with unchanged runtime.
+- Not yet validated against sidplayfp or real recordings. Next step: compare
+  noise-heavy and hard-restart-heavy tunes with the
+  `rasterklang-optimize` harnesses.
 
 ## What Is Deliberately Approximate
 

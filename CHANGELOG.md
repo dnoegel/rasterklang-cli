@@ -5,6 +5,12 @@ created. The project follows semantic version-style tags such as `v0.1.0`.
 
 ## Unreleased
 
+- SID envelopes now use a 15-bit rate counter that reproduces the ADSR delay
+  bug, and sustain keeps the decay period.
+- SID noise is clocked on accumulator bit 19 (16 times per period, previously
+  once) and is reset by the test bit.
+- 6502 read-modify-write instructions perform the dummy write of the original
+  value, and reads of write-only SID registers return the fading bus value.
 - Added MIT licensing and starter third-party notices.
 - Added CLI version metadata through `rasterklang --version` and
   `rasterklang version`.

@@ -29,6 +29,7 @@ func (c *Chip) sampleVoice(i int) float64 {
 	if control&0x08 != 0 {
 		v.phase = 0
 		v.wrapped = false
+		v.noise = noiseResetValue
 		env := v.env.advance(ad>>4, ad&0x0f, sr>>4, sr&0x0f, c.cpuHz/c.sampleRate)
 		target := 0.0
 		if control&0xf0 == 0 {
@@ -44,7 +45,7 @@ func (c *Chip) sampleVoice(i int) float64 {
 	oldPhase := v.phase
 	v.phase += step
 	v.wrapped = v.phase < oldPhase
-	if v.wrapped {
+	for n := noiseClocks(oldPhase, uint64(step)); n > 0; n-- {
 		v.noise = nextNoise(v.noise)
 	}
 
@@ -65,6 +66,7 @@ func (c *Chip) fastForwardVoice(i int, samples int) {
 	if control&0x08 != 0 {
 		v.phase = 0
 		v.wrapped = false
+		v.noise = noiseResetValue
 	} else {
 		if control&0x02 != 0 && c.voices[(i+2)%3].wrapped {
 			v.phase = 0
@@ -76,7 +78,7 @@ func (c *Chip) fastForwardVoice(i int, samples int) {
 		v.phase = uint32(before + delta)
 		v.wrapped = wraps > 0
 		if control&0x80 != 0 {
-			for ; wraps > 0; wraps-- {
+			for n := noiseClocks(uint32(before), delta); n > 0; n-- {
 				v.noise = nextNoise(v.noise)
 			}
 		}
@@ -90,4 +92,17 @@ func (c *Chip) fastForwardVoice(i int, samples int) {
 		}
 	}
 	c.fastForwardFloatingWave(v, samples)
+}
+
+// noiseResetValue is the shift register state the test bit leaves behind.
+const noiseResetValue = 0x7ffff8
+
+// noiseClocks counts rising edges of accumulator bit 19 while the phase
+// advances by delta. The voice keeps the 24-bit accumulator in the top bits of
+// a 32-bit phase, so bit 19 is phase bit 27 and rises once every 1<<28.
+func noiseClocks(phase uint32, delta uint64) uint64 {
+	const edgeOffset = 1 << 27
+	const edgePeriod = 1 << 28
+	start := uint64(phase) + (1 << 32) - edgeOffset
+	return (start+delta)/edgePeriod - start/edgePeriod
 }

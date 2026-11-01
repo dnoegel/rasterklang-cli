@@ -520,7 +520,7 @@ func TestSustainRegisterChangeDoesNotJumpEnvelope(t *testing.T) {
 		level: 0x44,
 		state: envSustain,
 	}
-	got := env.advance(0, 0, 0x0f, 0, envelopeRatePeriods[0])
+	got := env.advance(0, 0, 0x0f, 0, float64(envelopeRatePeriods[0]))
 	want := float64(0x44) / 255.0
 	if got != want {
 		t.Fatalf("sustain change jumped envelope to %.4f, want %.4f", got, want)
@@ -633,4 +633,85 @@ func absInt16(v int16) int16 {
 		return -v
 	}
 	return v
+}
+
+func TestEnvelopeRateCounterWrapsWhenPeriodDrops(t *testing.T) {
+	// Release at rate 15 lets the counter run past the attack-0 period. A new
+	// gate must wait for the 15-bit counter to wrap before the first attack step.
+	env := envelope{level: 0x00, state: envRelease}
+	env.advance(0, 0, 0, 0x0f, 10000)
+	env.state = envAttack
+
+	env.advance(0, 0, 0, 0x0f, float64(rateCounterRange-10000-1))
+	if env.level != 0 {
+		t.Fatalf("attack stepped before counter wrap: level=%d", env.level)
+	}
+	env.advance(0, 0, 0, 0x0f, float64(1+envelopeRatePeriods[0]))
+	if env.level != 1 {
+		t.Fatalf("attack level after wrap = %d, want 1", env.level)
+	}
+}
+
+func TestEnvelopeAttackStartsImmediatelyWhenCounterBelowPeriod(t *testing.T) {
+	env := envelope{level: 0x00, state: envRelease}
+	env.advance(0, 0, 0, 0x00, 3)
+	env.state = envAttack
+
+	env.advance(0, 0, 0, 0x00, float64(envelopeRatePeriods[0]-3))
+	if env.level != 1 {
+		t.Fatalf("attack level = %d, want 1 without delay", env.level)
+	}
+}
+
+func TestEnvelopeAccumulatesFractionalCycles(t *testing.T) {
+	env := envelope{level: 0x00, state: envAttack}
+	for i := 0; i < 4; i++ {
+		env.advance(0, 0, 0, 0, 2.25)
+	}
+	if env.level != 1 {
+		t.Fatalf("level after 9 cycles in quarter steps = %d, want 1", env.level)
+	}
+}
+
+func TestNoiseClocksSixteenTimesPerOscillatorPeriod(t *testing.T) {
+	if got := noiseClocks(0, 1<<32); got != 16 {
+		t.Fatalf("noise clocks per period = %d, want 16", got)
+	}
+	if got := noiseClocks(0, 1<<27-1); got != 0 {
+		t.Fatalf("noise clocked before bit 19 rose: %d", got)
+	}
+	if got := noiseClocks(0, 1<<27); got != 1 {
+		t.Fatalf("noise clocks at first bit-19 edge = %d, want 1", got)
+	}
+	if got := noiseClocks(0xf8000000, 1<<28); got != 1 {
+		t.Fatalf("noise clocks across phase wrap = %d, want 1", got)
+	}
+}
+
+func TestTestBitResetsNoiseShiftRegister(t *testing.T) {
+	chip := New(44100, 985248)
+	chip.voices[0].noise = 0x123456
+	chip.Write(0x04, 0x88) // noise + test
+	chip.RenderSubSample()
+	if chip.voices[0].noise != noiseResetValue {
+		t.Fatalf("noise = %#x after test bit, want %#x", chip.voices[0].noise, noiseResetValue)
+	}
+}
+
+func TestWriteOnlyRegisterReadsReturnFadingBusValue(t *testing.T) {
+	chip := New(44100, 985248)
+	chip.Write(0x05, 0x3c)
+	chip.Write(0x18, 0x0f)
+	if got := chip.Read(0x04); got != 0x0f {
+		t.Fatalf("read $D404 = $%02x, want last bus value $0f", got)
+	}
+	for i := 0; i < 2000; i++ {
+		chip.RenderSubSample()
+	}
+	if got := chip.Read(0x04); got != 0x00 {
+		t.Fatalf("read $D404 after bus fade = $%02x, want $00", got)
+	}
+	if got := chip.Register(0x05); got != 0x3c {
+		t.Fatalf("register $05 = $%02x, want $3c", got)
+	}
 }

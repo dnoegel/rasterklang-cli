@@ -12,12 +12,12 @@ func TestDelayedSIDWritesFlushExplicitly(t *testing.T) {
 	bus.DelaySIDWrites = true
 
 	bus.Write(0xd418, 0x0f)
-	if got := chip.Read(0x18); got != 0x00 {
+	if got := chip.Register(0x18); got != 0x00 {
 		t.Fatalf("SID reg before flush = $%02x, want queued write", got)
 	}
 
 	bus.FlushSIDWrites()
-	if got := chip.Read(0x18); got != 0x0f {
+	if got := chip.Register(0x18); got != 0x0f {
 		t.Fatalf("SID reg after flush = $%02x, want $0f", got)
 	}
 }
@@ -69,5 +69,46 @@ func TestGeneratedCodeAtC000IsExecutableRAM(t *testing.T) {
 	}
 	if got := chip.Register(0); got != 0x41 {
 		t.Fatalf("SID register 0 = $%02x, want generated code write", got)
+	}
+}
+
+func TestReadModifyWriteIssuesDummyWrite(t *testing.T) {
+	chip := sid.New(44100, 985248)
+	bus := NewBus(chip)
+	cpu := NewCPU(bus)
+	bus.RAM[0x1000] = 0xee // INC $2000
+	bus.RAM[0x1001] = 0x00
+	bus.RAM[0x1002] = 0x20
+	bus.RAM[0x2000] = 0x41
+	var writes []byte
+	bus.Hooks.OnBusWrite = func(addr uint16, value byte) {
+		if addr == 0x2000 {
+			writes = append(writes, value)
+		}
+	}
+	cpu.PC = 0x1000
+	if _, err := cpu.Step(); err != nil {
+		t.Fatal(err)
+	}
+	if len(writes) != 2 || writes[0] != 0x41 || writes[1] != 0x42 {
+		t.Fatalf("writes = %x, want dummy $41 then $42", writes)
+	}
+}
+
+func TestIncD019AcknowledgesRasterIRQ(t *testing.T) {
+	bus := NewBus(sid.New(44100, 985248))
+	cpu := NewCPU(bus)
+	bus.RAM[vicD01A] = 0x01
+	bus.RAM[vicD019] = 0x01
+	bus.refreshVICIRQ()
+	bus.RAM[0x1000] = 0xee // INC $D019
+	bus.RAM[0x1001] = 0x19
+	bus.RAM[0x1002] = 0xd0
+	cpu.PC = 0x1000
+	if _, err := cpu.Step(); err != nil {
+		t.Fatal(err)
+	}
+	if got := bus.Read(vicD019); got&0x81 != 0 {
+		t.Fatalf("$D019 = $%02x after INC, want raster IRQ acknowledged", got)
 	}
 }

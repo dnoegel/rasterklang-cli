@@ -88,12 +88,21 @@ func (c *CPU) ror(v byte) byte {
 	return out
 }
 
+// rmwRead performs the read and the unmodified dummy write that every 6502
+// read-modify-write instruction puts on the bus before the final write. I/O
+// registers see both writes, which is why INC $D019 acknowledges VIC IRQs.
+func (c *CPU) rmwRead(addr uint16) byte {
+	v := c.read(addr)
+	c.write(addr, v)
+	return v
+}
+
 func (c *CPU) shiftMem(addr uint16, fn func(byte) byte) {
-	c.write(addr, fn(c.read(addr)))
+	c.write(addr, fn(c.rmwRead(addr)))
 }
 
 func (c *CPU) rmw(addr uint16, fn func(byte) byte) {
-	out := fn(c.read(addr))
+	out := fn(c.rmwRead(addr))
 	c.write(addr, out)
 	c.setZN(out)
 }
@@ -127,40 +136,40 @@ func (c *CPU) unofficialRMWAddress(op byte) (uint16, int) {
 }
 
 func (c *CPU) slo(addr uint16) {
-	v := c.asl(c.read(addr))
+	v := c.asl(c.rmwRead(addr))
 	c.write(addr, v)
 	c.A |= v
 	c.setZN(c.A)
 }
 
 func (c *CPU) rla(addr uint16) {
-	v := c.rol(c.read(addr))
+	v := c.rol(c.rmwRead(addr))
 	c.write(addr, v)
 	c.A &= v
 	c.setZN(c.A)
 }
 
 func (c *CPU) sre(addr uint16) {
-	v := c.lsr(c.read(addr))
+	v := c.lsr(c.rmwRead(addr))
 	c.write(addr, v)
 	c.A ^= v
 	c.setZN(c.A)
 }
 
 func (c *CPU) rra(addr uint16) {
-	v := c.ror(c.read(addr))
+	v := c.ror(c.rmwRead(addr))
 	c.write(addr, v)
 	c.adc(v)
 }
 
 func (c *CPU) dcp(addr uint16) {
-	v := c.read(addr) - 1
+	v := c.rmwRead(addr) - 1
 	c.write(addr, v)
 	c.compare(c.A, v)
 }
 
 func (c *CPU) isb(addr uint16) {
-	v := c.read(addr) + 1
+	v := c.rmwRead(addr) + 1
 	c.write(addr, v)
 	c.sbc(v)
 }
