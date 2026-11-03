@@ -5,6 +5,10 @@ created. The project follows semantic version-style tags such as `v0.1.0`.
 
 ## Unreleased
 
+## v0.1.0 - 2026-11-03
+
+Initial public release.
+
 - SID envelopes now use a 15-bit rate counter that reproduces the ADSR delay
   bug, and sustain keeps the decay period.
 - SID noise is clocked on accumulator bit 19 (16 times per period, previously
@@ -22,8 +26,3 @@ created. The project follows semantic version-style tags such as `v0.1.0`.
   package-manager status, and HVSC/tune licensing.
 - Replaced remaining public "POC" support wording with release-grade
   Rasterklang support labels and errors.
-
-## v0.1.0
-
-Initial public release target. This version is not tagged until the release
-checklist in `Rasterklang-Releaseplan.md` is complete for the core CLI.
